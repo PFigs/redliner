@@ -9,8 +9,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from compose_review.diff import FileDiff
-from compose_review.review import load_review, save_review
+from redliner.diff import FileDiff
+from redliner.review import load_review, save_review
 
 
 class ReviewServer(HTTPServer):
@@ -236,7 +236,7 @@ DIFF_HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>compose-review diff</title>
+<title>redliner diff</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎷</text></svg>">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -397,7 +397,7 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 <body>
 
 <header id="header">
-  <div class="title">compose-review diff</div>
+  <div class="title">redliner diff</div>
   <div class="stats" id="stats"></div>
   <div class="actions" id="header-actions"></div>
 </header>
@@ -704,7 +704,7 @@ HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>compose-review</title>
+<title>redliner</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎷</text></svg>">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1159,7 +1159,7 @@ def run_web(plan_file: Path) -> dict:
 
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}"
-    print(f"compose-review: {url}", file=sys.stderr)
+    print(f"redliner: {url}", file=sys.stderr)
 
     webbrowser.open(url)
 
@@ -1191,7 +1191,7 @@ def run_diff_web(file_diffs: list[FileDiff]) -> dict:
 
     port = server.server_address[1]
     url = f"http://127.0.0.1:{port}"
-    print(f"compose-review diff: {url}", file=sys.stderr)
+    print(f"redliner diff: {url}", file=sys.stderr)
 
     webbrowser.open(url)
 

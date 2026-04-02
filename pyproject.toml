@@ -1,7 +1,7 @@
 [project]
-name = "compose-review"
+name = "redliner"
 version = "0.1.0"
-description = "PR-like review tool for plan files"
+description = "Review tool for plans and code diffs"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -22,11 +22,11 @@ classifiers = [
 Repository = "https://github.com/PFigs/plan-review-tool"
 
 [project.scripts]
-compose-review = "compose_review.cli:main"
+redliner = "redliner.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/compose_review"]
+packages = ["src/redliner"]

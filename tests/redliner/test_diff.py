@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from compose_review.diff import FileDiff, DiffLine, parse_git_diff
+from redliner.diff import FileDiff, DiffLine, parse_git_diff
 
 
 def test_parse_no_changes(git_repo):

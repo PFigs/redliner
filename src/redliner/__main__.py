@@ -1,4 +1,4 @@
-from compose_review.cli import main
+from redliner.cli import main
 
 if __name__ == "__main__":
     main()

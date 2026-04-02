@@ -1,4 +1,4 @@
-"""CLI entry point for compose-review."""
+"""CLI entry point for redliner."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from compose_review.review import load_review, save_review
+from redliner.review import load_review, save_review
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -117,7 +117,7 @@ def cmd_open(args: argparse.Namespace) -> None:
         print(f"File not found: {plan_file}", file=sys.stderr)
         sys.exit(1)
 
-    from compose_review.web import run_web
+    from redliner.web import run_web
 
     result = run_web(plan_file)
     print(json.dumps(result))
@@ -125,7 +125,7 @@ def cmd_open(args: argparse.Namespace) -> None:
 
 
 def cmd_diff(args: argparse.Namespace) -> None:
-    from compose_review.diff import parse_git_diff
+    from redliner.diff import parse_git_diff
 
     file_diffs = parse_git_diff(path=args.path)
 
@@ -137,7 +137,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
         print(json.dumps({"files": len(file_diffs), "status": "pending"}))
         sys.exit(0)
 
-    from compose_review.web import run_diff_web
+    from redliner.web import run_diff_web
 
     result = run_diff_web(file_diffs)
     print(json.dumps(result))
@@ -146,8 +146,8 @@ def cmd_diff(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="compose-review",
-        description="PR-like review tool for plan files",
+        prog="redliner",
+        description="Review tool for plans and code diffs",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
