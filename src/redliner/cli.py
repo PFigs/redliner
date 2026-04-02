@@ -76,6 +76,17 @@ def cmd_resolve(args: argparse.Namespace) -> None:
     print(f"Resolved comment #{args.id}")
 
 
+def cmd_delete(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    review = load_review(plan_file)
+    comment = review.delete(args.id)
+    if comment is None:
+        print(f"Comment #{args.id} not found", file=sys.stderr)
+        sys.exit(1)
+    save_review(plan_file, review)
+    print(f"Deleted comment #{args.id}")
+
+
 def cmd_resolve_all(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     review = load_review(plan_file)
@@ -173,6 +184,12 @@ def main() -> None:
     p.add_argument("file", help="Path to plan file")
     p.add_argument("id", type=int, help="Comment ID")
     p.set_defaults(func=cmd_resolve)
+
+    # delete
+    p = sub.add_parser("delete", help="Delete a comment")
+    p.add_argument("file", help="Path to plan file")
+    p.add_argument("id", type=int, help="Comment ID")
+    p.set_defaults(func=cmd_delete)
 
     # resolve-all
     p = sub.add_parser("resolve-all", help="Resolve all pending comments")
