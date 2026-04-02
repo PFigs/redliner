@@ -53,6 +53,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._select_file()
         elif m := re.match(r"^/api/resolve/(\d+)$", self.path):
             self._resolve(int(m.group(1)))
+        elif m := re.match(r"^/api/delete/(\d+)$", self.path):
+            self._delete_comment(int(m.group(1)))
         else:
             self._not_found()
 
@@ -142,6 +144,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         save_review(plan_file, review)
         self._json_response(self._review_dict())
+
+    def _delete_comment(self, comment_id: int) -> None:
+        plan_file = self._active_plan_file()
+        review = load_review(plan_file)
+        if review.delete(comment_id) is None:
+            self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
+            return
+        save_review(plan_file, review)
+        if self.server.mode == "diff":
+            self._get_diff()
+        else:
+            self._json_response(self._review_dict())
 
     def _resolve_all(self) -> None:
         plan_file = self._active_plan_file()
@@ -377,6 +391,8 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 .comment-text { flex: 1; word-break: break-word; }
 .comment-actions { flex-shrink: 0; }
 .comment-actions button { padding: 2px 10px; font-size: 12px; }
+.comment-actions .btn-delete { color: #f85149; border-color: #f8514966; background: transparent; }
+.comment-actions .btn-delete:hover { background: #da36332e; }
 .resolved-tag { color: #3fb950; font-size: 12px; font-weight: 500; }
 
 .comment-form {
@@ -562,8 +578,8 @@ function render() {
       const block = document.createElement('div');
       block.className = `comment-block ${c.status}`;
       const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button></div>`
-        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span></div>`;
+        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
+        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
       block.innerHTML =
         `<span class="comment-meta">#${c.id}</span>` +
         `<span class="comment-text">${escapeHtml(c.text)}</span>` +
@@ -642,6 +658,11 @@ async function submitComment(lineNum) {
 
 async function resolveComment(id) {
   await fetch(`/api/resolve/${id}`, { method: 'POST' });
+  await fetchDiff();
+}
+
+async function deleteComment(id) {
+  await fetch(`/api/delete/${id}`, { method: 'POST' });
   await fetchDiff();
 }
 
@@ -903,6 +924,8 @@ main {
   padding: 2px 10px;
   font-size: 12px;
 }
+.comment-actions .btn-delete { color: #f85149; border-color: #f8514966; background: transparent; }
+.comment-actions .btn-delete:hover { background: #da36332e; }
 
 .resolved-tag {
   color: #3fb950;
@@ -1047,8 +1070,8 @@ function render() {
       const block = document.createElement('div');
       block.className = `comment-block ${c.status}`;
       const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button></div>`
-        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span></div>`;
+        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
+        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
       block.innerHTML =
         `<span class="comment-meta">#${c.id}</span>` +
         `<span class="comment-text">${escapeHtml(c.text)}</span>` +
@@ -1109,6 +1132,12 @@ async function submitComment(lineNum) {
 
 async function resolveComment(id) {
   const res = await fetch(`/api/resolve/${id}`, { method: 'POST' });
+  state.review = await res.json();
+  await fetchReview();
+}
+
+async function deleteComment(id) {
+  const res = await fetch(`/api/delete/${id}`, { method: 'POST' });
   state.review = await res.json();
   await fetchReview();
 }

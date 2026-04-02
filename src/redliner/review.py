@@ -53,6 +53,12 @@ class Review:
                 return c
         return None
 
+    def delete(self, comment_id: int) -> Comment | None:
+        for i, c in enumerate(self.comments):
+            if c.id == comment_id:
+                return self.comments.pop(i)
+        return None
+
     def resolve_all(self) -> int:
         count = 0
         for c in self.comments:
