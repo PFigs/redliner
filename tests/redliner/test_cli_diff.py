@@ -1,4 +1,4 @@
-"""Tests for `compose_review diff` CLI subcommand."""
+"""Tests for `redliner diff` CLI subcommand."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 def _run_diff(git_repo, *extra_args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-m", "compose_review", "diff", *extra_args],
+        [sys.executable, "-m", "redliner", "diff", *extra_args],
         cwd=git_repo,
         capture_output=True,
         text=True,
