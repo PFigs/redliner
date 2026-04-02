@@ -79,14 +79,17 @@ def _parse(output: str) -> list[FileDiff]:
             new_num = int(hunk_match.group(2))
             continue
 
+        text = line[1:]
         if line.startswith("+"):
-            current.lines.append(DiffLine(old_num=None, new_num=new_num, kind="added", text=line[1:]))
+            current.lines.append(DiffLine(old_num=None, new_num=new_num, kind="added", text=text))
             new_num += 1
         elif line.startswith("-"):
-            current.lines.append(DiffLine(old_num=old_num, new_num=None, kind="removed", text=line[1:]))
+            current.lines.append(DiffLine(old_num=old_num, new_num=None, kind="removed", text=text))
             old_num += 1
         elif line.startswith(" "):
-            current.lines.append(DiffLine(old_num=old_num, new_num=new_num, kind="context", text=line[1:]))
+            current.lines.append(
+                DiffLine(old_num=old_num, new_num=new_num, kind="context", text=text),
+            )
             old_num += 1
             new_num += 1
 

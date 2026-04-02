@@ -1,9 +1,6 @@
 import subprocess
-from pathlib import Path
 
-import pytest
-
-from redliner.diff import FileDiff, DiffLine, parse_git_diff
+from redliner.diff import parse_git_diff
 
 
 def test_parse_no_changes(git_repo):
@@ -26,9 +23,9 @@ def test_parse_modified_file(git_repo):
     assert "removed" in kinds
     assert "added" in kinds
 
-    context_lines = [l for l in file_diff.lines if l.kind == "context"]
-    removed_lines = [l for l in file_diff.lines if l.kind == "removed"]
-    added_lines = [l for l in file_diff.lines if l.kind == "added"]
+    context_lines = [ln for ln in file_diff.lines if ln.kind == "context"]
+    removed_lines = [ln for ln in file_diff.lines if ln.kind == "removed"]
+    added_lines = [ln for ln in file_diff.lines if ln.kind == "added"]
 
     assert context_lines[0].text.strip() == "def greet():"
     assert context_lines[0].old_num == 1
@@ -54,9 +51,9 @@ def test_parse_new_file(git_repo):
     file_diff = result[0]
     assert file_diff.path == "new.py"
 
-    assert all(l.kind == "added" for l in file_diff.lines)
-    assert all(l.old_num is None for l in file_diff.lines)
-    new_nums = [l.new_num for l in file_diff.lines]
+    assert all(ln.kind == "added" for ln in file_diff.lines)
+    assert all(ln.old_num is None for ln in file_diff.lines)
+    new_nums = [ln.new_num for ln in file_diff.lines]
     assert new_nums == [1, 2]
 
 
@@ -70,9 +67,9 @@ def test_parse_deleted_file(git_repo):
     file_diff = result[0]
     assert file_diff.path == "hello.py"
 
-    assert all(l.kind == "removed" for l in file_diff.lines)
-    assert all(l.new_num is None for l in file_diff.lines)
-    old_nums = [l.old_num for l in file_diff.lines]
+    assert all(ln.kind == "removed" for ln in file_diff.lines)
+    assert all(ln.new_num is None for ln in file_diff.lines)
+    old_nums = [ln.old_num for ln in file_diff.lines]
     assert old_nums == [1, 2]
 
 
@@ -93,7 +90,9 @@ def test_parse_multiple_hunks(git_repo):
     hello = git_repo / "hello.py"
     hello.write_text("".join(lines))
     subprocess.run(["git", "add", "hello.py"], cwd=git_repo, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "add lines"], cwd=git_repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add lines"], cwd=git_repo, check=True, capture_output=True,
+    )
 
     modified = lines[:]
     modified[0] = "LINE1\n"
