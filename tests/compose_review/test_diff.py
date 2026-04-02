@@ -106,7 +106,6 @@ def test_parse_multiple_hunks(git_repo):
     file_diff = result[0]
 
     hunk_starts = []
-    prev_kind = None
     in_hunk = False
     for line in file_diff.lines:
         if line.kind in ("added", "removed") and not in_hunk:

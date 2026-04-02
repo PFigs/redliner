@@ -2,13 +2,14 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass
 class DiffLine:
     old_num: int | None
     new_num: int | None
-    kind: str  # "context", "added", "removed"
+    kind: Literal["context", "added", "removed"]
     text: str
 
 
@@ -20,9 +21,9 @@ class FileDiff:
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 # Matches the old-file header: --- <prefix>/<path> or --- /dev/null
-_OLD_FILE_HEADER = re.compile(r"^--- (.+)$")
+_OLD_FILE_HEADER = re.compile(r"^--- (\S+)")
 # Matches the new-file header: +++ <prefix>/<path> or +++ /dev/null
-_NEW_FILE_HEADER = re.compile(r"^\+\+\+ (.+)$")
+_NEW_FILE_HEADER = re.compile(r"^\+\+\+ (\S+)")
 # Strips any single-character prefix followed by slash (a/, b/, c/, w/, i/, o/ etc)
 _PREFIX = re.compile(r"^./")
 
