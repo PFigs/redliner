@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/PFigs/plan-review-tool"
+Repository = "https://github.com/PFigs/redliner"
 
 [project.scripts]
 redliner = "redliner.cli:main"
