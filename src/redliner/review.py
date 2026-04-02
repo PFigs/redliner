@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,8 +77,19 @@ class Review:
         return True
 
 
+def _data_dir() -> Path:
+    """Return the XDG data directory for redliner."""
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "redliner" / "reviews"
+
+
 def sidecar_path(plan_file: Path) -> Path:
-    return plan_file.parent / f"{plan_file.name}.review.json"
+    """Map a file path to its review JSON path under XDG_DATA_HOME."""
+    resolved = plan_file.resolve()
+    # Use a hash prefix to avoid extremely deep directory trees
+    path_hash = hashlib.sha256(str(resolved).encode()).hexdigest()[:12]
+    # Keep the filename readable in the storage dir
+    return _data_dir() / path_hash / f"{resolved.name}.review.json"
 
 
 def load_review(plan_file: Path) -> Review:
@@ -94,6 +107,7 @@ def load_review(plan_file: Path) -> Review:
 
 def save_review(plan_file: Path, review: Review) -> None:
     path = sidecar_path(plan_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {"status": review.status, "comments": [asdict(c) for c in review.comments]}
     if review.approved_at:
         data["approved_at"] = review.approved_at

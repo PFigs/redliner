@@ -2,7 +2,7 @@
 
 A local review tool for AI agent work. Comment on plans and code diffs line-by-line, resolve feedback, and approve changes through a web UI or CLI.
 
-The idea: an agent writes code, you redline it. Comments are saved as JSON sidecar files that the agent can read and act on.
+The idea: an agent writes code, you redline it. Comments are stored as JSON files that the agent can read and act on.
 
 ## Install
 
@@ -37,12 +37,7 @@ The diff view shows old and new versions in collapsible columns. Click any line 
 
 ## How comments are stored
 
-Comments live in `.review.json` sidecar files next to whatever you're reviewing:
-
-```
-plan.md           -> plan.md.review.json
-src/foo.py        -> src/foo.py.review.json
-```
+Comments are stored under `$XDG_DATA_HOME/redliner/reviews/` (defaults to `~/.local/share/redliner/reviews/`). Each reviewed file gets a JSON file keyed by a hash of its absolute path, keeping your repo clean.
 
 ```json
 {
@@ -53,14 +48,14 @@ src/foo.py        -> src/foo.py.review.json
 }
 ```
 
-Agents read these files, fix the issues, and you re-run the review.
+Use `redliner status <file>` to check review state, or `redliner list <file>` to see all comments. Agents can read the JSON files directly from the data directory.
 
 ## Agent workflow
 
 1. Agent writes code or a plan
 2. You run `redliner diff` or `redliner open plan.md`
 3. You leave comments on specific lines
-4. Agent reads the `.review.json` files and addresses feedback
+4. Agent reads the review JSON files and addresses feedback
 5. You review again until satisfied, then approve
 
 ## Requirements
