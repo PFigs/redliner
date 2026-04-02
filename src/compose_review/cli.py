@@ -124,6 +124,26 @@ def cmd_open(args: argparse.Namespace) -> None:
     sys.exit(0 if result["status"] == "approved" else 1)
 
 
+def cmd_diff(args: argparse.Namespace) -> None:
+    from compose_review.diff import parse_git_diff
+
+    file_diffs = parse_git_diff(path=args.path)
+
+    if not file_diffs:
+        print(json.dumps({"files": 0, "status": "no_changes"}))
+        sys.exit(0)
+
+    if args.no_open:
+        print(json.dumps({"files": len(file_diffs), "status": "pending"}))
+        sys.exit(0)
+
+    from compose_review.web import run_diff_web
+
+    result = run_diff_web(file_diffs)
+    print(json.dumps(result))
+    sys.exit(0 if result["status"] == "approved" else 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="compose-review",
@@ -173,6 +193,12 @@ def main() -> None:
     p = sub.add_parser("open", help="Open web review in browser")
     p.add_argument("file", help="Path to plan file")
     p.set_defaults(func=cmd_open)
+
+    # diff
+    p = sub.add_parser("diff", help="Review git diff in side-by-side web UI")
+    p.add_argument("--path", default=None, help="Filter to a single file path")
+    p.add_argument("--no-open", action="store_true", help="Print status without launching browser")
+    p.set_defaults(func=cmd_diff)
 
     args = parser.parse_args()
     args.func(args)
