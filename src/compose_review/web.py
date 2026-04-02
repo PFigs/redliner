@@ -9,12 +9,17 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+from compose_review.diff import FileDiff
 from compose_review.review import load_review, save_review
 
 
 class ReviewServer(HTTPServer):
     plan_file: Path
     done: bool = False
+    mode: str = "plan"  # "plan" | "diff"
+    diff_data: list[FileDiff] = []
+    active_file: str = ""
+    repo_root: Path = Path(".")
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -30,6 +35,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._serve_html()
         elif self.path == "/api/review":
             self._get_review()
+        elif self.path == "/api/diff" and self.server.mode == "diff":
+            self._get_diff()
         else:
             self._not_found()
 
@@ -42,6 +49,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._approve()
         elif self.path == "/api/quit":
             self._quit()
+        elif self.path == "/api/select-file" and self.server.mode == "diff":
+            self._select_file()
         elif m := re.match(r"^/api/resolve/(\d+)$", self.path):
             self._resolve(int(m.group(1)))
         else:
@@ -86,10 +95,17 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+    def _active_plan_file(self) -> Path:
+        """Return the file path that comment/resolve/approve should operate on."""
+        if self.server.mode == "diff":
+            return self.server.repo_root / self.server.active_file
+        return self.server.plan_file
+
     # -- endpoints --
 
     def _serve_html(self) -> None:
-        body = HTML_TEMPLATE.encode()
+        template = DIFF_HTML_TEMPLATE if self.server.mode == "diff" else HTML_TEMPLATE
+        body = template.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -97,7 +113,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _get_review(self) -> None:
-        plan_file = self.server.plan_file
+        plan_file = self._active_plan_file()
         lines = plan_file.read_text().splitlines() if plan_file.exists() else []
         self._json_response({
             "filename": plan_file.name,
@@ -112,14 +128,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not isinstance(line, int) or not text:
             self._json_response({"error": "line (int) and text required"}, 400)
             return
-        plan_file = self.server.plan_file
+        plan_file = self._active_plan_file()
         review = load_review(plan_file)
         review.add_comment(line, text)
         save_review(plan_file, review)
         self._json_response(self._review_dict())
 
     def _resolve(self, comment_id: int) -> None:
-        plan_file = self.server.plan_file
+        plan_file = self._active_plan_file()
         review = load_review(plan_file)
         if review.resolve(comment_id) is None:
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
@@ -128,13 +144,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._json_response(self._review_dict())
 
     def _resolve_all(self) -> None:
-        plan_file = self.server.plan_file
+        plan_file = self._active_plan_file()
         review = load_review(plan_file)
         review.resolve_all()
         save_review(plan_file, review)
         self._json_response(self._review_dict())
 
     def _approve(self) -> None:
+        if self.server.mode == "diff":
+            self._approve_diff()
+            return
         plan_file = self.server.plan_file
         review = load_review(plan_file)
         if not review.approve():
@@ -147,10 +166,71 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.server.done = True
         self._json_response(self._review_dict())
 
+    def _approve_diff(self) -> None:
+        total_pending = 0
+        for fd in self.server.diff_data:
+            plan_file = self.server.repo_root / fd.path
+            review = load_review(plan_file)
+            total_pending += len(review.pending)
+
+        if total_pending > 0:
+            self._json_response(
+                {"error": f"Cannot approve: {total_pending} unresolved comment(s) across files"},
+                409,
+            )
+            return
+
+        for fd in self.server.diff_data:
+            plan_file = self.server.repo_root / fd.path
+            review = load_review(plan_file)
+            review.approve()
+            save_review(plan_file, review)
+
+        self.server.done = True
+        self._get_diff()
+
+    def _get_diff(self) -> None:
+        from dataclasses import asdict
+        files = []
+        for fd in self.server.diff_data:
+            plan_file = self.server.repo_root / fd.path
+            review = load_review(plan_file)
+            files.append({
+                "path": fd.path,
+                "lines": [asdict(l) for l in fd.lines],
+                "review": {
+                    "status": review.status,
+                    "pending": len(review.pending),
+                    "resolved": len(review.resolved),
+                    "comments": [
+                        {"id": c.id, "line": c.line, "text": c.text,
+                         "status": c.status, "created": c.created}
+                        for c in review.comments
+                    ],
+                    "approved_at": review.approved_at,
+                },
+            })
+        self._json_response({
+            "files": files,
+            "active_file": self.server.active_file,
+        })
+
+    def _select_file(self) -> None:
+        body = self._read_body()
+        path = body.get("path", "")
+        valid_paths = [fd.path for fd in self.server.diff_data]
+        if path not in valid_paths:
+            self._json_response({"error": f"Unknown file: {path}"}, 404)
+            return
+        self.server.active_file = path
+        self._get_diff()
+
     def _quit(self) -> None:
         self.server.done = True
         self._json_response({"ok": True})
 
+
+DIFF_HTML_TEMPLATE = "<html><body>Diff mode</body></html>"
 
 HTML_TEMPLATE = """\
 <!DOCTYPE html>
@@ -630,4 +710,46 @@ def run_web(plan_file: Path) -> dict:
         "status": review.status,
         "pending": len(review.pending),
         "resolved": len(review.resolved),
+    }
+
+
+def run_diff_web(file_diffs: list[FileDiff]) -> dict:
+    """Start a local web server for interactive diff review and block until done."""
+    server = ReviewServer(("127.0.0.1", 0), ReviewHandler)
+    server.mode = "diff"
+    server.diff_data = file_diffs
+    server.active_file = file_diffs[0].path if file_diffs else ""
+    server.repo_root = Path.cwd()
+    server.done = False
+    server.timeout = 0.5
+
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}"
+    print(f"compose-review diff: {url}", file=sys.stderr)
+
+    webbrowser.open(url)
+
+    try:
+        while not server.done:
+            server.handle_request()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+    total_pending = 0
+    total_resolved = 0
+    all_approved = True
+    for fd in file_diffs:
+        review = load_review(Path.cwd() / fd.path)
+        total_pending += len(review.pending)
+        total_resolved += len(review.resolved)
+        if review.status != "approved":
+            all_approved = False
+
+    return {
+        "status": "approved" if all_approved else "in_review",
+        "files": len(file_diffs),
+        "pending": total_pending,
+        "resolved": total_resolved,
     }
