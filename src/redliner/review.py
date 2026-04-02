@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -20,7 +20,7 @@ class Comment:
 
     def __post_init__(self) -> None:
         if not self.created:
-            self.created = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.created = datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -73,7 +73,7 @@ class Review:
         if self.pending:
             return False
         self.status = "approved"
-        self.approved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.approved_at = datetime.now(UTC).isoformat(timespec="seconds")
         return True
 
 

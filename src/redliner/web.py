@@ -220,7 +220,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             review = load_review(plan_file)
             files.append({
                 "path": fd.path,
-                "lines": [asdict(l) for l in fd.lines],
+                "lines": [asdict(dl) for dl in fd.lines],
                 "review": {
                     "status": review.status,
                     "pending": len(review.pending),
