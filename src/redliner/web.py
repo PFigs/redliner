@@ -134,7 +134,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
         review = load_review(plan_file)
         review.add_comment(line, text)
         save_review(plan_file, review)
-        self._json_response(self._review_dict())
+        if self.server.mode == "diff":
+            self._get_diff()
+        else:
+            self._json_response(self._review_dict())
 
     def _resolve(self, comment_id: int) -> None:
         plan_file = self._active_plan_file()
@@ -143,7 +146,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
             return
         save_review(plan_file, review)
-        self._json_response(self._review_dict())
+        if self.server.mode == "diff":
+            self._get_diff()
+        else:
+            self._json_response(self._review_dict())
 
     def _delete_comment(self, comment_id: int) -> None:
         plan_file = self._active_plan_file()
@@ -162,7 +168,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
         review = load_review(plan_file)
         review.resolve_all()
         save_review(plan_file, review)
-        self._json_response(self._review_dict())
+        if self.server.mode == "diff":
+            self._get_diff()
+        else:
+            self._json_response(self._review_dict())
 
     def _approve(self) -> None:
         if self.server.mode == "diff":
@@ -305,25 +314,108 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 .file-tabs {
   display: flex; gap: 0; padding: 0 24px;
   background: #161b22; border-bottom: 1px solid #30363d;
-  overflow-x: auto;
+  overflow-x: auto; align-items: center;
+}
+.file-tabs-empty {
+  padding: 8px 16px; color: #484f58; font-size: 13px; font-style: italic;
 }
 .file-tab {
   padding: 8px 16px; font-size: 13px; cursor: pointer;
   border-bottom: 2px solid transparent; color: #8b949e;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   white-space: nowrap; transition: color 0.15s;
+  display: flex; align-items: center; gap: 6px;
 }
 .file-tab:hover { color: #e6edf3; }
 .file-tab.active { color: #e6edf3; border-bottom-color: #f78166; }
 .file-tab .tab-badge {
-  display: inline-block; margin-left: 6px; padding: 0 6px;
+  display: inline-block; padding: 0 6px;
   border-radius: 10px; font-size: 11px; background: #d29922; color: #0d1117;
 }
 .file-tab .tab-badge.clean { background: #238636; color: #fff; }
+.file-tab .tab-viewed {
+  color: #484f58; cursor: pointer; font-size: 14px; margin-left: 4px;
+  border: none; background: none; padding: 0; line-height: 1;
+}
+.file-tab .tab-viewed:hover { color: #8b949e; }
+
+/* Main area: sidebar + diff */
+.main-area {
+  display: grid; min-height: calc(100vh - 120px);
+  transition: grid-template-columns 0.2s ease;
+}
+.main-area.sidebar-open { grid-template-columns: 250px 1fr; }
+.main-area.sidebar-collapsed { grid-template-columns: 36px 1fr; }
+
+/* File tree sidebar */
+.file-tree {
+  background: #0d1117; border-right: 1px solid #30363d;
+  overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column;
+}
+.tree-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: #161b22; border-bottom: 1px solid #30363d;
+  font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase;
+  letter-spacing: 0.5px; position: sticky; top: 0;
+}
+.tree-header .tree-toggle {
+  width: 20px; height: 20px; border: none; background: transparent;
+  color: #8b949e; cursor: pointer; font-size: 14px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; flex-shrink: 0;
+}
+.tree-header .tree-toggle:hover { background: #30363d; color: #e6edf3; }
+.tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-collapsed .tree-label { display: none; }
+.sidebar-collapsed .tree-body { display: none; }
+.tree-body { flex: 1; padding: 4px 0; }
+
+.tree-dir {
+  user-select: none;
+}
+.tree-dir-label {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 10px; cursor: pointer; color: #8b949e;
+  font-size: 13px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+.tree-dir-label:hover { color: #e6edf3; background: #161b22; }
+.tree-dir-label .chevron {
+  font-size: 10px; width: 14px; text-align: center;
+  transition: transform 0.15s;
+}
+.tree-dir.collapsed .chevron { transform: rotate(-90deg); }
+.tree-dir.collapsed .tree-dir-children { display: none; }
+.tree-dir-children { padding-left: 12px; }
+
+.tree-file {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 10px 3px 14px; cursor: pointer; color: #e6edf3;
+  font-size: 13px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  border-left: 2px solid transparent;
+}
+.tree-file:hover { background: #161b22; }
+.tree-file.active { border-left-color: #f78166; background: #161b22; }
+.tree-file.viewed { opacity: 0.4; }
+.tree-file.viewed .tree-file-name { text-decoration: line-through; }
+.tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-file .tree-badge {
+  font-size: 10px; padding: 0 5px; border-radius: 8px;
+  background: #d29922; color: #0d1117; flex-shrink: 0;
+}
+.tree-file .tree-badge.clean { background: #238636; color: #fff; }
+.tree-file .tree-viewed-btn {
+  width: 18px; height: 18px; border: none; background: transparent;
+  color: #484f58; cursor: pointer; font-size: 13px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; flex-shrink: 0;
+}
+.tree-file .tree-viewed-btn:hover { background: #30363d; color: #e6edf3; }
+.tree-file.viewed .tree-viewed-btn { color: #3fb950; }
 
 /* Diff container */
 .diff-container {
-  display: grid; margin: 0; min-height: calc(100vh - 120px);
+  display: grid; margin: 0;
   transition: grid-template-columns 0.2s ease;
 }
 .diff-container.both-open { grid-template-columns: 1fr 1fr; }
@@ -420,20 +512,29 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 
 <div class="file-tabs" id="file-tabs"></div>
 
-<div class="diff-container both-open" id="diff-container">
-  <div class="diff-column" id="col-old">
-    <div class="col-header">
-      <button class="col-toggle" id="toggle-old" title="Collapse old">&lsaquo;</button>
-      <span class="col-label">Old</span>
+<div class="main-area sidebar-open" id="main-area">
+  <div class="file-tree" id="file-tree">
+    <div class="tree-header">
+      <button class="tree-toggle" id="sidebar-toggle" title="Toggle sidebar">&lsaquo;</button>
+      <span class="tree-label">Files</span>
     </div>
-    <div class="col-body" id="old-body"></div>
+    <div class="tree-body" id="tree-body"></div>
   </div>
-  <div class="diff-column" id="col-new">
-    <div class="col-header">
-      <span class="col-label">New</span>
-      <button class="col-toggle" id="toggle-new" title="Collapse new">&rsaquo;</button>
+  <div class="diff-container both-open" id="diff-container">
+    <div class="diff-column" id="col-old">
+      <div class="col-header">
+        <button class="col-toggle" id="toggle-old" title="Collapse old">&lsaquo;</button>
+        <span class="col-label">Old</span>
+      </div>
+      <div class="col-body" id="old-body"></div>
     </div>
-    <div class="col-body" id="new-body"></div>
+    <div class="diff-column" id="col-new">
+      <div class="col-header">
+        <span class="col-label">New</span>
+        <button class="col-toggle" id="toggle-new" title="Collapse new">&rsaquo;</button>
+      </div>
+      <div class="col-body" id="new-body"></div>
+    </div>
   </div>
 </div>
 
@@ -443,6 +544,8 @@ let activeFormLine = null;
 let activeFormSide = null;
 let leftCollapsed = false;
 let rightCollapsed = false;
+let sidebarCollapsed = false;
+const viewedFiles = new Set();
 
 async function fetchDiff() {
   const res = await fetch('/api/diff');
@@ -499,19 +602,29 @@ function render() {
       `<button class="btn-approve" onclick="approveReview()" ${stats.pending > 0 ? 'disabled' : ''}>Approve</button>`;
   }
 
-  // File tabs
+  // File tabs (unviewed only)
   const tabsEl = document.getElementById('file-tabs');
   tabsEl.innerHTML = '';
-  for (const f of state.files) {
-    const tab = document.createElement('div');
-    tab.className = 'file-tab' + (f.path === state.active_file ? ' active' : '');
-    const badgeClass = f.review.pending > 0 ? '' : ' clean';
-    const badgeText = f.review.pending > 0 ? f.review.pending : '\\u2713';
-    tab.innerHTML = escapeHtml(f.path) +
-      `<span class="tab-badge${badgeClass}">${badgeText}</span>`;
-    tab.addEventListener('click', () => selectFile(f.path));
-    tabsEl.appendChild(tab);
+  const unviewedFiles = state.files.filter(f => !viewedFiles.has(f.path));
+  if (unviewedFiles.length === 0 && state.files.length > 0) {
+    tabsEl.innerHTML = '<span class="file-tabs-empty">All files viewed</span>';
+  } else {
+    for (const f of unviewedFiles) {
+      const tab = document.createElement('div');
+      tab.className = 'file-tab' + (f.path === state.active_file ? ' active' : '');
+      const badgeClass = f.review.pending > 0 ? '' : ' clean';
+      const badgeText = f.review.pending > 0 ? f.review.pending : '\\u2713';
+      const nameSpan = `<span>${escapeHtml(f.path)}</span>`;
+      const badge = `<span class="tab-badge${badgeClass}">${badgeText}</span>`;
+      const viewBtn = `<button class="tab-viewed" title="Mark viewed" onclick="event.stopPropagation(); toggleViewed('${f.path}')">\\u2713</button>`;
+      tab.innerHTML = nameSpan + badge + viewBtn;
+      tab.addEventListener('click', () => selectFile(f.path));
+      tabsEl.appendChild(tab);
+    }
   }
+
+  // File tree
+  renderTree();
 
   // Diff columns
   const file = getActiveFile();
@@ -680,6 +793,101 @@ async function quit() {
   await fetch('/api/quit', { method: 'POST' });
   document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8b949e;font-size:16px;">Review closed. You can close this tab.</div>';
 }
+
+// File tree
+function buildTree(files) {
+  const root = {};
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = {};
+      node = node[parts[i]];
+    }
+    node[parts[parts.length - 1]] = f;
+  }
+  return root;
+}
+
+function renderTree() {
+  if (!state) return;
+  const body = document.getElementById('tree-body');
+  body.innerHTML = '';
+  const tree = buildTree(state.files);
+  renderTreeNode(body, tree, 0);
+}
+
+function renderTreeNode(container, node, depth) {
+  const dirs = [];
+  const files = [];
+  for (const [name, val] of Object.entries(node)) {
+    if (val && val.path !== undefined) files.push({ name, data: val });
+    else dirs.push({ name, children: val });
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const dir of dirs) {
+    const dirEl = document.createElement('div');
+    dirEl.className = 'tree-dir';
+    const label = document.createElement('div');
+    label.className = 'tree-dir-label';
+    label.style.paddingLeft = (10 + depth * 12) + 'px';
+    label.innerHTML = `<span class="chevron">&#9660;</span> ${escapeHtml(dir.name)}/`;
+    label.addEventListener('click', () => dirEl.classList.toggle('collapsed'));
+    dirEl.appendChild(label);
+    const children = document.createElement('div');
+    children.className = 'tree-dir-children';
+    renderTreeNode(children, dir.children, depth + 1);
+    dirEl.appendChild(children);
+    container.appendChild(dirEl);
+  }
+
+  for (const file of files) {
+    const f = file.data;
+    const el = document.createElement('div');
+    const isViewed = viewedFiles.has(f.path);
+    const isActive = f.path === state.active_file;
+    el.className = 'tree-file' + (isActive ? ' active' : '') + (isViewed ? ' viewed' : '');
+    el.style.paddingLeft = (14 + depth * 12) + 'px';
+    const badgeClass = f.review.pending > 0 ? '' : ' clean';
+    const badgeText = f.review.pending > 0 ? f.review.pending : '\\u2713';
+    el.innerHTML =
+      `<span class="tree-file-name">${escapeHtml(file.name)}</span>` +
+      `<span class="tree-badge${badgeClass}">${badgeText}</span>` +
+      `<button class="tree-viewed-btn" title="${isViewed ? 'Unmark viewed' : 'Mark viewed'}">${isViewed ? '\\u2713' : '\\u25CB'}</button>`;
+    el.querySelector('.tree-file-name').addEventListener('click', () => selectFile(f.path));
+    el.querySelector('.tree-viewed-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleViewed(f.path);
+    });
+    container.appendChild(el);
+  }
+}
+
+function toggleViewed(path) {
+  if (viewedFiles.has(path)) {
+    viewedFiles.delete(path);
+  } else {
+    viewedFiles.add(path);
+    // Auto-advance if marking the active file as viewed
+    if (state && path === state.active_file) {
+      const next = state.files.find(f => !viewedFiles.has(f.path) && f.path !== path);
+      if (next) {
+        selectFile(next.path);
+        return;
+      }
+    }
+  }
+  render();
+}
+
+// Sidebar toggle
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+  sidebarCollapsed = !sidebarCollapsed;
+  const main = document.getElementById('main-area');
+  main.className = 'main-area ' + (sidebarCollapsed ? 'sidebar-collapsed' : 'sidebar-open');
+});
 
 // Column collapse toggles
 document.getElementById('toggle-old').addEventListener('click', () => {

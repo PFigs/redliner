@@ -1,6 +1,6 @@
 [project]
 name = "redliner"
-version = "0.1.0"
+version = "0.1.1"
 description = "Review tool for plans and code diffs"
 readme = "README.md"
 license = "MIT"
