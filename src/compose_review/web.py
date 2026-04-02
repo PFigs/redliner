@@ -17,7 +17,7 @@ class ReviewServer(HTTPServer):
     plan_file: Path
     done: bool = False
     mode: str = "plan"  # "plan" | "diff"
-    diff_data: list[FileDiff] = []
+    diff_data: list[FileDiff]
     active_file: str = ""
     repo_root: Path = Path(".")
 
@@ -167,11 +167,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._json_response(self._review_dict())
 
     def _approve_diff(self) -> None:
+        reviews = []
         total_pending = 0
         for fd in self.server.diff_data:
             plan_file = self.server.repo_root / fd.path
             review = load_review(plan_file)
             total_pending += len(review.pending)
+            reviews.append((plan_file, review))
 
         if total_pending > 0:
             self._json_response(
@@ -180,9 +182,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             )
             return
 
-        for fd in self.server.diff_data:
-            plan_file = self.server.repo_root / fd.path
-            review = load_review(plan_file)
+        for plan_file, review in reviews:
             review.approve()
             save_review(plan_file, review)
 
@@ -741,7 +741,7 @@ def run_diff_web(file_diffs: list[FileDiff]) -> dict:
     total_resolved = 0
     all_approved = True
     for fd in file_diffs:
-        review = load_review(Path.cwd() / fd.path)
+        review = load_review(server.repo_root / fd.path)
         total_pending += len(review.pending)
         total_resolved += len(review.resolved)
         if review.status != "approved":
