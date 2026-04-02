@@ -1,0 +1,633 @@
+"""Local web UI for interactive plan review."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+from compose_review.review import load_review, save_review
+
+
+class ReviewServer(HTTPServer):
+    plan_file: Path
+    done: bool = False
+
+
+class ReviewHandler(BaseHTTPRequestHandler):
+    server: ReviewServer
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    # -- routing --
+
+    def do_GET(self) -> None:
+        if self.path == "/":
+            self._serve_html()
+        elif self.path == "/api/review":
+            self._get_review()
+        else:
+            self._not_found()
+
+    def do_POST(self) -> None:
+        if self.path == "/api/comment":
+            self._add_comment()
+        elif self.path == "/api/resolve-all":
+            self._resolve_all()
+        elif self.path == "/api/approve":
+            self._approve()
+        elif self.path == "/api/quit":
+            self._quit()
+        elif m := re.match(r"^/api/resolve/(\d+)$", self.path):
+            self._resolve(int(m.group(1)))
+        else:
+            self._not_found()
+
+    # -- helpers --
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length))
+
+    def _json_response(self, data: dict, status: int = 200) -> None:
+        body = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _review_dict(self) -> dict:
+        review = load_review(self.server.plan_file)
+        return {
+            "status": review.status,
+            "pending": len(review.pending),
+            "resolved": len(review.resolved),
+            "comments": [
+                {
+                    "id": c.id,
+                    "line": c.line,
+                    "text": c.text,
+                    "status": c.status,
+                    "created": c.created,
+                }
+                for c in review.comments
+            ],
+            "approved_at": review.approved_at,
+        }
+
+    def _not_found(self) -> None:
+        self.send_response(404)
+        self.end_headers()
+
+    # -- endpoints --
+
+    def _serve_html(self) -> None:
+        body = HTML_TEMPLATE.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _get_review(self) -> None:
+        plan_file = self.server.plan_file
+        lines = plan_file.read_text().splitlines() if plan_file.exists() else []
+        self._json_response({
+            "filename": plan_file.name,
+            "lines": lines,
+            "review": self._review_dict(),
+        })
+
+    def _add_comment(self) -> None:
+        body = self._read_body()
+        line = body.get("line")
+        text = body.get("text", "").strip()
+        if not isinstance(line, int) or not text:
+            self._json_response({"error": "line (int) and text required"}, 400)
+            return
+        plan_file = self.server.plan_file
+        review = load_review(plan_file)
+        review.add_comment(line, text)
+        save_review(plan_file, review)
+        self._json_response(self._review_dict())
+
+    def _resolve(self, comment_id: int) -> None:
+        plan_file = self.server.plan_file
+        review = load_review(plan_file)
+        if review.resolve(comment_id) is None:
+            self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
+            return
+        save_review(plan_file, review)
+        self._json_response(self._review_dict())
+
+    def _resolve_all(self) -> None:
+        plan_file = self.server.plan_file
+        review = load_review(plan_file)
+        review.resolve_all()
+        save_review(plan_file, review)
+        self._json_response(self._review_dict())
+
+    def _approve(self) -> None:
+        plan_file = self.server.plan_file
+        review = load_review(plan_file)
+        if not review.approve():
+            self._json_response(
+                {"error": f"Cannot approve: {len(review.pending)} unresolved comment(s)"},
+                409,
+            )
+            return
+        save_review(plan_file, review)
+        self.server.done = True
+        self._json_response(self._review_dict())
+
+    def _quit(self) -> None:
+        self.server.done = True
+        self._json_response({"ok": True})
+
+
+HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compose-review</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎷</text></svg>">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+header.approved {
+  background: #0a2e1a;
+  border-bottom-color: #238636;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
+}
+
+.stats {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge.pending-badge {
+  background: #2d1600;
+  color: #d29922;
+  border: 1px solid #d29922;
+}
+.badge.resolved-badge {
+  background: #0a2e1a;
+  color: #3fb950;
+  border: 1px solid #238636;
+}
+.badge.approved-badge {
+  background: #238636;
+  color: #fff;
+  border: 1px solid #2ea043;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+button {
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+button:hover { background: #30363d; }
+
+button.btn-approve {
+  background: #238636;
+  border-color: #2ea043;
+}
+button.btn-approve:hover { background: #2ea043; }
+button.btn-approve:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #238636;
+}
+
+button.btn-danger {
+  color: #f85149;
+  border-color: #f8514966;
+}
+button.btn-danger:hover { background: #da36332e; }
+
+button.btn-submit {
+  background: #238636;
+  border-color: #2ea043;
+}
+button.btn-submit:hover { background: #2ea043; }
+
+button.btn-cancel {
+  background: transparent;
+  border-color: #30363d;
+}
+
+main {
+  margin: 0 auto;
+  padding: 16px 24px;
+}
+
+.file-card {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 0;
+}
+
+.line-row {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  min-height: 22px;
+}
+.line-row:hover {
+  background: #1c2128;
+}
+.line-row:hover .line-num {
+  color: #8b949e;
+}
+
+.line-num {
+  color: #484f58;
+  text-align: right;
+  padding: 0 12px 0 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  user-select: none;
+  line-height: 22px;
+  border-right: 1px solid #21262d;
+}
+
+.line-text {
+  padding: 0 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 22px;
+  tab-size: 4;
+}
+
+.comment-block {
+  margin-left: 60px;
+  border-left: 3px solid;
+  padding: 8px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  border-bottom: 1px solid #21262d;
+}
+.comment-block.pending {
+  border-left-color: #d29922;
+  background: #2d160044;
+}
+.comment-block.resolved {
+  border-left-color: #238636;
+  background: #0a2e1a44;
+}
+
+.comment-meta {
+  color: #8b949e;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.comment-text {
+  flex: 1;
+  word-break: break-word;
+}
+
+.comment-actions {
+  flex-shrink: 0;
+}
+.comment-actions button {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.resolved-tag {
+  color: #3fb950;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.comment-form {
+  margin-left: 60px;
+  padding: 10px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  border-left: 3px solid #58a6ff;
+}
+.comment-form textarea {
+  width: 100%;
+  min-height: 60px;
+  background: #0d1117;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+}
+.comment-form textarea:focus {
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px #58a6ff33;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.form-hint {
+  color: #484f58;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: #8b949e;
+}
+</style>
+</head>
+<body>
+
+<header id="header">
+  <div class="title" id="filename"></div>
+  <div class="stats" id="stats"></div>
+  <div class="actions" id="header-actions"></div>
+</header>
+
+<main>
+  <div class="file-card" id="file-content"></div>
+</main>
+
+<script>
+let state = null;
+let activeFormLine = null;
+
+async function fetchReview() {
+  const res = await fetch('/api/review');
+  state = await res.json();
+  render();
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function render() {
+  if (!state) return;
+  const { filename, lines, review } = state;
+
+  // Header
+  const hdr = document.getElementById('header');
+  hdr.className = review.status === 'approved' ? 'approved' : '';
+
+  document.title = filename;
+  document.getElementById('filename').textContent = filename;
+
+  // Stats
+  const statsEl = document.getElementById('stats');
+  if (review.status === 'approved') {
+    statsEl.innerHTML = '<span class="badge approved-badge">Approved</span>';
+  } else {
+    statsEl.innerHTML =
+      `<span class="badge pending-badge">${review.pending} pending</span>` +
+      `<span class="badge resolved-badge">${review.resolved} resolved</span>`;
+  }
+
+  // Actions
+  const actionsEl = document.getElementById('header-actions');
+  if (review.status === 'approved') {
+    actionsEl.innerHTML = '<button class="btn-danger" onclick="quit()">Close</button>';
+  } else {
+    const hasPending = review.pending > 0;
+    actionsEl.innerHTML =
+      `<button onclick="resolveAll()" ${review.pending === 0 ? 'disabled' : ''}>Resolve All</button>` +
+      `<button class="btn-approve" onclick="approveReview()" ${hasPending ? 'disabled' : ''}>Approve</button>`;
+  }
+
+  // File content
+  const container = document.getElementById('file-content');
+  container.innerHTML = '';
+
+  if (lines.length === 0) {
+    container.innerHTML = '<div class="empty-state">No file content</div>';
+    return;
+  }
+
+  // Index comments by line
+  const commentsByLine = {};
+  review.comments.forEach(c => {
+    (commentsByLine[c.line] ||= []).push(c);
+  });
+
+  lines.forEach((text, i) => {
+    const lineNum = i + 1;
+
+    // Line row
+    const row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML =
+      `<span class="line-num">${lineNum}</span>` +
+      `<span class="line-text">${escapeHtml(text)}</span>`;
+    if (review.status !== 'approved') {
+      row.addEventListener('click', () => showCommentForm(lineNum));
+    }
+    container.appendChild(row);
+
+    // Comments on this line
+    (commentsByLine[lineNum] || []).forEach(c => {
+      const block = document.createElement('div');
+      block.className = `comment-block ${c.status}`;
+      const actions = c.status === 'pending'
+        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button></div>`
+        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span></div>`;
+      block.innerHTML =
+        `<span class="comment-meta">#${c.id}</span>` +
+        `<span class="comment-text">${escapeHtml(c.text)}</span>` +
+        actions;
+      container.appendChild(block);
+    });
+
+    // Show comment form if active on this line
+    if (activeFormLine === lineNum && review.status !== 'approved') {
+      container.appendChild(createCommentForm(lineNum));
+    }
+  });
+}
+
+function showCommentForm(lineNum) {
+  if (state.review.status === 'approved') return;
+  activeFormLine = activeFormLine === lineNum ? null : lineNum;
+  render();
+  if (activeFormLine !== null) {
+    const ta = document.querySelector('.comment-form textarea');
+    if (ta) ta.focus();
+  }
+}
+
+function createCommentForm(lineNum) {
+  const form = document.createElement('div');
+  form.className = 'comment-form';
+  form.innerHTML =
+    `<textarea placeholder="Add a comment on line ${lineNum}..." id="comment-input"></textarea>` +
+    '<div class="form-actions">' +
+    '  <button class="btn-cancel" onclick="cancelForm()">Cancel</button>' +
+    `  <button class="btn-submit" onclick="submitComment(${lineNum})">Comment</button>` +
+    '</div>' +
+    '<div class="form-hint">Ctrl+Enter to submit</div>';
+  // Stop click from toggling the form off
+  form.addEventListener('click', e => e.stopPropagation());
+  return form;
+}
+
+function cancelForm() {
+  activeFormLine = null;
+  render();
+}
+
+async function submitComment(lineNum) {
+  const ta = document.getElementById('comment-input');
+  const text = ta ? ta.value.trim() : '';
+  if (!text) return;
+  activeFormLine = null;
+  const res = await fetch('/api/comment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ line: lineNum, text }),
+  });
+  state.review = await res.json();
+  await fetchReview();
+}
+
+async function resolveComment(id) {
+  const res = await fetch(`/api/resolve/${id}`, { method: 'POST' });
+  state.review = await res.json();
+  await fetchReview();
+}
+
+async function resolveAll() {
+  const res = await fetch('/api/resolve-all', { method: 'POST' });
+  state.review = await res.json();
+  await fetchReview();
+}
+
+async function approveReview() {
+  const res = await fetch('/api/approve', { method: 'POST' });
+  if (res.ok) {
+    state.review = await res.json();
+    await fetchReview();
+  }
+}
+
+async function quit() {
+  await fetch('/api/quit', { method: 'POST' });
+  document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8b949e;font-size:16px;">Review closed. You can close this tab.</div>';
+}
+
+// Ctrl+Enter to submit
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter' && activeFormLine !== null) {
+    e.preventDefault();
+    submitComment(activeFormLine);
+  }
+  if (e.key === 'Escape' && activeFormLine !== null) {
+    e.preventDefault();
+    cancelForm();
+  }
+});
+
+fetchReview();
+</script>
+</body>
+</html>
+"""
+
+
+def run_web(plan_file: Path) -> dict:
+    """Start a local web server for interactive review and block until done."""
+    server = ReviewServer(("127.0.0.1", 0), ReviewHandler)
+    server.plan_file = plan_file
+    server.timeout = 0.5
+
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}"
+    print(f"compose-review: {url}", file=sys.stderr)
+
+    webbrowser.open(url)
+
+    try:
+        while not server.done:
+            server.handle_request()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+    review = load_review(plan_file)
+    return {
+        "status": review.status,
+        "pending": len(review.pending),
+        "resolved": len(review.resolved),
+    }
