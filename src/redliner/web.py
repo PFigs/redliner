@@ -55,6 +55,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._resolve(int(m.group(1)))
         elif m := re.match(r"^/api/delete/(\d+)$", self.path):
             self._delete_comment(int(m.group(1)))
+        elif m := re.match(r"^/api/edit/(\d+)$", self.path):
+            self._edit_comment(int(m.group(1)))
         else:
             self._not_found()
 
@@ -155,6 +157,23 @@ class ReviewHandler(BaseHTTPRequestHandler):
         plan_file = self._active_plan_file()
         review = load_review(plan_file)
         if review.delete(comment_id) is None:
+            self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
+            return
+        save_review(plan_file, review)
+        if self.server.mode == "diff":
+            self._get_diff()
+        else:
+            self._json_response(self._review_dict())
+
+    def _edit_comment(self, comment_id: int) -> None:
+        body = self._read_body()
+        text = body.get("text", "").strip()
+        if not text:
+            self._json_response({"error": "text required"}, 400)
+            return
+        plan_file = self._active_plan_file()
+        review = load_review(plan_file)
+        if review.edit(comment_id, text) is None:
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
             return
         save_review(plan_file, review)
@@ -498,6 +517,13 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
   font-size: 13px; resize: vertical; outline: none;
 }
 .comment-form textarea:focus { border-color: #58a6ff; box-shadow: 0 0 0 2px #58a6ff33; }
+.edit-textarea {
+  width: 100%; min-height: 40px; background: #0d1117; color: #e6edf3;
+  border: 1px solid #58a6ff; border-radius: 6px; padding: 6px 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px; resize: vertical; outline: none;
+}
+.edit-textarea:focus { box-shadow: 0 0 0 2px #58a6ff33; }
 .form-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .form-hint { color: #484f58; font-size: 11px; margin-top: 4px; }
 </style>
@@ -690,8 +716,9 @@ function render() {
     for (const c of lineComments) {
       const block = document.createElement('div');
       block.className = `comment-block ${c.status}`;
+      block.setAttribute('data-comment-id', c.id);
       const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
+        ? `<div class="comment-actions"><button onclick="startEdit(${c.id})">Edit</button><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
         : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
       block.innerHTML =
         `<span class="comment-meta">#${c.id}</span>` +
@@ -777,6 +804,43 @@ async function resolveComment(id) {
 async function deleteComment(id) {
   await fetch(`/api/delete/${id}`, { method: 'POST' });
   await fetchDiff();
+}
+
+function startEdit(id) {
+  const block = document.querySelector(`[data-comment-id="${id}"]`);
+  if (!block) return;
+  const textEl = block.querySelector('.comment-text');
+  const actionsEl = block.querySelector('.comment-actions');
+  const original = textEl.textContent;
+  textEl.innerHTML = `<textarea class="edit-textarea">${escapeHtml(original)}</textarea>`;
+  const ta = textEl.querySelector('textarea');
+  ta.focus();
+  ta.selectionStart = ta.value.length;
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); saveEdit(id); }
+    if (e.key === 'Escape') { cancelEdit(id); }
+  });
+  actionsEl.innerHTML =
+    `<button onclick="saveEdit(${id})">Save</button>` +
+    `<button class="btn-delete" onclick="cancelEdit(${id})">Cancel</button>`;
+}
+
+async function saveEdit(id) {
+  const block = document.querySelector(`[data-comment-id="${id}"]`);
+  if (!block) return;
+  const ta = block.querySelector('.edit-textarea');
+  const text = ta.value.trim();
+  if (!text) return;
+  await fetch(`/api/edit/${id}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  await fetchDiff();
+}
+
+function cancelEdit(id) {
+  render();
 }
 
 async function resolveAll() {
@@ -1165,6 +1229,13 @@ main {
   border-color: #58a6ff;
   box-shadow: 0 0 0 2px #58a6ff33;
 }
+.edit-textarea {
+  width: 100%; min-height: 40px; background: #0d1117; color: #e6edf3;
+  border: 1px solid #58a6ff; border-radius: 6px; padding: 6px 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 13px; resize: vertical; outline: none;
+}
+.edit-textarea:focus { box-shadow: 0 0 0 2px #58a6ff33; }
 .form-actions {
   display: flex;
   gap: 8px;
@@ -1277,8 +1348,9 @@ function render() {
     (commentsByLine[lineNum] || []).forEach(c => {
       const block = document.createElement('div');
       block.className = `comment-block ${c.status}`;
+      block.setAttribute('data-comment-id', c.id);
       const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
+        ? `<div class="comment-actions"><button onclick="startEdit(${c.id})">Edit</button><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
         : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
       block.innerHTML =
         `<span class="comment-meta">#${c.id}</span>` +
@@ -1348,6 +1420,44 @@ async function deleteComment(id) {
   const res = await fetch(`/api/delete/${id}`, { method: 'POST' });
   state.review = await res.json();
   await fetchReview();
+}
+
+function startEdit(id) {
+  const block = document.querySelector(`[data-comment-id="${id}"]`);
+  if (!block) return;
+  const textEl = block.querySelector('.comment-text');
+  const actionsEl = block.querySelector('.comment-actions');
+  const original = textEl.textContent;
+  textEl.innerHTML = `<textarea class="edit-textarea">${escapeHtml(original)}</textarea>`;
+  const ta = textEl.querySelector('textarea');
+  ta.focus();
+  ta.selectionStart = ta.value.length;
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); saveEdit(id); }
+    if (e.key === 'Escape') { cancelEdit(id); }
+  });
+  actionsEl.innerHTML =
+    `<button onclick="saveEdit(${id})">Save</button>` +
+    `<button class="btn-delete" onclick="cancelEdit(${id})">Cancel</button>`;
+}
+
+async function saveEdit(id) {
+  const block = document.querySelector(`[data-comment-id="${id}"]`);
+  if (!block) return;
+  const ta = block.querySelector('.edit-textarea');
+  const text = ta.value.trim();
+  if (!text) return;
+  const res = await fetch(`/api/edit/${id}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  state.review = await res.json();
+  await fetchReview();
+}
+
+function cancelEdit(id) {
+  render();
 }
 
 async function resolveAll() {

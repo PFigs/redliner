@@ -61,6 +61,13 @@ class Review:
                 return self.comments.pop(i)
         return None
 
+    def edit(self, comment_id: int, text: str) -> Comment | None:
+        for c in self.comments:
+            if c.id == comment_id:
+                c.text = text
+                return c
+        return None
+
     def resolve_all(self) -> int:
         count = 0
         for c in self.comments:
