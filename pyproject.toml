@@ -1,6 +1,6 @@
 [project]
 name = "redliner"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Review tool for plans and code diffs"
 readme = "README.md"
 license = "MIT"
@@ -33,8 +33,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling==1.27.0"]
+requires = ["hatchling==1.27.0", "hatch-vcs>=0.4,<1"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/redliner"]
