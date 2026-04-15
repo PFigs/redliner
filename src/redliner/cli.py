@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 from redliner.review import load_review, save_review
@@ -159,6 +160,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="redliner",
         description="Review tool for plans and code diffs",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {version('redliner')}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
