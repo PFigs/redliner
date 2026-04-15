@@ -7,7 +7,7 @@ The idea: an agent writes code, you redline it. Comments are stored as JSON file
 ## Install
 
 ```
-pip install redliner
+uv tool install redliner
 ```
 
 ## Plan review
