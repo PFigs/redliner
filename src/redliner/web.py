@@ -357,6 +357,9 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
   border: none; background: none; padding: 0; line-height: 1;
 }
 .file-tab .tab-viewed:hover { color: #8b949e; }
+.file-tab.viewed { opacity: 0.5; }
+.file-tab.viewed span:first-child { text-decoration: line-through; }
+.file-tab.viewed .tab-viewed { color: #3fb950; }
 
 /* Main area: sidebar + diff */
 .main-area {
@@ -468,7 +471,7 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 /* Diff lines */
 .diff-line {
   display: grid; grid-template-columns: 50px 1fr;
-  min-height: 22px; cursor: pointer;
+  min-height: 22px; cursor: pointer; align-items: start;
 }
 .diff-line:hover { filter: brightness(1.15); }
 .diff-line.empty-row { opacity: 0.3; }
@@ -482,7 +485,8 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
 .diff-line-text {
   padding: 0 12px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 13px; white-space: pre; line-height: 22px; tab-size: 4;
+  font-size: 13px; white-space: pre-wrap; word-break: break-word;
+  line-height: 22px; tab-size: 4;
 }
 
 .diff-line.removed { background: #3d1214; }
@@ -628,25 +632,22 @@ function render() {
       `<button class="btn-approve" onclick="approveReview()" ${stats.pending > 0 ? 'disabled' : ''}>Approve</button>`;
   }
 
-  // File tabs (unviewed only)
+  // File tabs
   const tabsEl = document.getElementById('file-tabs');
   tabsEl.innerHTML = '';
-  const unviewedFiles = state.files.filter(f => !viewedFiles.has(f.path));
-  if (unviewedFiles.length === 0 && state.files.length > 0) {
-    tabsEl.innerHTML = '<span class="file-tabs-empty">All files viewed</span>';
-  } else {
-    for (const f of unviewedFiles) {
-      const tab = document.createElement('div');
-      tab.className = 'file-tab' + (f.path === state.active_file ? ' active' : '');
-      const badgeClass = f.review.pending > 0 ? '' : ' clean';
-      const badgeText = f.review.pending > 0 ? f.review.pending : '\\u2713';
-      const nameSpan = `<span>${escapeHtml(f.path)}</span>`;
-      const badge = `<span class="tab-badge${badgeClass}">${badgeText}</span>`;
-      const viewBtn = `<button class="tab-viewed" title="Mark viewed" onclick="event.stopPropagation(); toggleViewed('${f.path}')">\\u2713</button>`;
-      tab.innerHTML = nameSpan + badge + viewBtn;
-      tab.addEventListener('click', () => selectFile(f.path));
-      tabsEl.appendChild(tab);
-    }
+  for (const f of state.files) {
+    const isViewed = viewedFiles.has(f.path);
+    const tab = document.createElement('div');
+    tab.className = 'file-tab' + (f.path === state.active_file ? ' active' : '') + (isViewed ? ' viewed' : '');
+    const badgeClass = f.review.pending > 0 ? '' : ' clean';
+    const badgeText = f.review.pending > 0 ? f.review.pending : '\\u2713';
+    const nameSpan = `<span>${escapeHtml(f.path)}</span>`;
+    const badge = `<span class="tab-badge${badgeClass}">${badgeText}</span>`;
+    const title = isViewed ? 'Unmark viewed' : 'Mark viewed';
+    const viewBtn = `<button class="tab-viewed" title="${title}" onclick="event.stopPropagation(); toggleViewed('${f.path}')">\\u2713</button>`;
+    tab.innerHTML = nameSpan + badge + viewBtn;
+    tab.addEventListener('click', () => selectFile(f.path));
+    tabsEl.appendChild(tab);
   }
 
   // File tree
@@ -849,8 +850,11 @@ async function resolveAll() {
 }
 
 async function approveReview() {
+  const btn = document.querySelector('.btn-approve');
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving...'; }
   const res = await fetch('/api/approve', { method: 'POST' });
   if (res.ok) await fetchDiff();
+  else if (btn) { btn.disabled = false; btn.textContent = 'Approve'; }
 }
 
 async function quit() {
@@ -1129,6 +1133,7 @@ main {
   border-bottom: 1px solid transparent;
   cursor: pointer;
   min-height: 22px;
+  align-items: start;
 }
 .line-row:hover {
   background: #1c2128;
@@ -1152,8 +1157,8 @@ main {
   padding: 0 12px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 13px;
-  white-space: pre;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
   line-height: 22px;
   tab-size: 4;
 }
@@ -1467,10 +1472,15 @@ async function resolveAll() {
 }
 
 async function approveReview() {
+  const btn = document.querySelector('.btn-approve');
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving...'; }
   const res = await fetch('/api/approve', { method: 'POST' });
   if (res.ok) {
     state.review = await res.json();
     await fetchReview();
+  } else if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'Approve';
   }
 }
 
