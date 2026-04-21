@@ -37,18 +37,21 @@ The diff view shows old and new versions in collapsible columns. Click any line 
 
 ## How comments are stored
 
-Comments are stored under `$XDG_DATA_HOME/redliner/reviews/` (defaults to `~/.local/share/redliner/reviews/`). Each reviewed file gets a JSON file keyed by a hash of its absolute path, keeping your repo clean.
+Comments are stored under `$XDG_DATA_HOME/redliner/reviews/` (defaults to `~/.local/share/redliner/reviews/`). Each review session (a plan file, or a diff over a repo) gets its own directory with `comments.jsonl` and `meta.json`.
+
+`comments.jsonl` has one comment per line, each self-describing with the full file path:
 
 ```json
-{
-  "status": "in_review",
-  "comments": [
-    {"id": 1, "line": 42, "text": "Handle the None case", "status": "pending"}
-  ]
-}
+{"id": 1, "file": "/abs/path/plan.md", "line": 42, "text": "Handle the None case", "status": "pending", "created": "..."}
 ```
 
-Use `redliner status <file>` to check review state, or `redliner list <file>` to see all comments. Agents can read the JSON files directly from the data directory.
+`meta.json` tracks per-file review status:
+
+```json
+{"files": {"/abs/path/plan.md": {"status": "approved", "approved_at": "..."}}}
+```
+
+The storage path is shown in the web UI header with a one-click copy button. From the CLI, `redliner status <file>` prints it as `"storage"`. Agents can read `comments.jsonl` directly.
 
 ## Agent workflow
 

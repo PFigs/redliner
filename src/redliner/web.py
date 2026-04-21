@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from redliner.diff import FileDiff
-from redliner.review import load_review, save_review
+from redliner.review import load_review, save_review, session_dir
 
 
 class ReviewServer(HTTPServer):
@@ -20,6 +20,7 @@ class ReviewServer(HTTPServer):
     diff_data: list[FileDiff]
     active_file: str = ""
     repo_root: Path = Path(".")
+    session: Path = Path(".")
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -76,25 +77,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _review_dict(self) -> dict:
-        review = load_review(self.server.plan_file)
-        return {
-            "status": review.status,
-            "pending": len(review.pending),
-            "resolved": len(review.resolved),
-            "comments": [
-                {
-                    "id": c.id,
-                    "line": c.line,
-                    "text": c.text,
-                    "status": c.status,
-                    "created": c.created,
-                }
-                for c in review.comments
-            ],
-            "approved_at": review.approved_at,
-        }
-
     def _not_found(self) -> None:
         self.send_response(404)
         self.end_headers()
@@ -104,6 +86,31 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if self.server.mode == "diff":
             return self.server.repo_root / self.server.active_file
         return self.server.plan_file
+
+    def _active_key(self) -> str:
+        return str(self._active_plan_file().resolve())
+
+    def _file_review_dict(self, file_key: str) -> dict:
+        review = load_review(self.server.session)
+        pending = review.pending_for(file_key)
+        resolved = review.resolved_for(file_key)
+        return {
+            "status": review.status_for(file_key),
+            "pending": len(pending),
+            "resolved": len(resolved),
+            "comments": [
+                {
+                    "id": c.id,
+                    "file": c.file,
+                    "line": c.line,
+                    "text": c.text,
+                    "status": c.status,
+                    "created": c.created,
+                }
+                for c in review.comments_for(file_key)
+            ],
+            "approved_at": review.approved_at_for(file_key),
+        }
 
     # -- endpoints --
 
@@ -118,11 +125,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _get_review(self) -> None:
         plan_file = self._active_plan_file()
+        key = self._active_key()
         lines = plan_file.read_text().splitlines() if plan_file.exists() else []
         self._json_response({
             "filename": plan_file.name,
+            "file_path": key,
+            "storage": str(session_dir(self.server.session)),
             "lines": lines,
-            "review": self._review_dict(),
+            "review": self._file_review_dict(key),
         })
 
     def _add_comment(self) -> None:
@@ -132,38 +142,36 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not isinstance(line, int) or not text:
             self._json_response({"error": "line (int) and text required"}, 400)
             return
-        plan_file = self._active_plan_file()
-        review = load_review(plan_file)
-        review.add_comment(line, text)
-        save_review(plan_file, review)
+        key = self._active_key()
+        review = load_review(self.server.session)
+        review.add_comment(key, line, text)
+        save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
         else:
-            self._json_response(self._review_dict())
+            self._json_response(self._file_review_dict(key))
 
     def _resolve(self, comment_id: int) -> None:
-        plan_file = self._active_plan_file()
-        review = load_review(plan_file)
+        review = load_review(self.server.session)
         if review.resolve(comment_id) is None:
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
             return
-        save_review(plan_file, review)
+        save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
         else:
-            self._json_response(self._review_dict())
+            self._json_response(self._file_review_dict(self._active_key()))
 
     def _delete_comment(self, comment_id: int) -> None:
-        plan_file = self._active_plan_file()
-        review = load_review(plan_file)
+        review = load_review(self.server.session)
         if review.delete(comment_id) is None:
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
             return
-        save_review(plan_file, review)
+        save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
         else:
-            self._json_response(self._review_dict())
+            self._json_response(self._file_review_dict(self._active_key()))
 
     def _edit_comment(self, comment_id: int) -> None:
         body = self._read_body()
@@ -171,52 +179,50 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not text:
             self._json_response({"error": "text required"}, 400)
             return
-        plan_file = self._active_plan_file()
-        review = load_review(plan_file)
+        review = load_review(self.server.session)
         if review.edit(comment_id, text) is None:
             self._json_response({"error": f"Comment #{comment_id} not found"}, 404)
             return
-        save_review(plan_file, review)
+        save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
         else:
-            self._json_response(self._review_dict())
+            self._json_response(self._file_review_dict(self._active_key()))
 
     def _resolve_all(self) -> None:
-        plan_file = self._active_plan_file()
-        review = load_review(plan_file)
-        review.resolve_all()
-        save_review(plan_file, review)
+        review = load_review(self.server.session)
+        if self.server.mode == "diff":
+            for fd in self.server.diff_data:
+                review.resolve_all(file=str((self.server.repo_root / fd.path).resolve()))
+        else:
+            review.resolve_all(file=self._active_key())
+        save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
         else:
-            self._json_response(self._review_dict())
+            self._json_response(self._file_review_dict(self._active_key()))
 
     def _approve(self) -> None:
         if self.server.mode == "diff":
             self._approve_diff()
             return
-        plan_file = self.server.plan_file
-        review = load_review(plan_file)
-        if not review.approve():
+        key = self._active_key()
+        review = load_review(self.server.session)
+        if not review.approve(key):
             self._json_response(
-                {"error": f"Cannot approve: {len(review.pending)} unresolved comment(s)"},
+                {"error": f"Cannot approve: {len(review.pending_for(key))} unresolved comment(s)"},
                 409,
             )
             return
-        save_review(plan_file, review)
+        save_review(self.server.session, review)
         self.server.done = True
-        self._json_response(self._review_dict())
+        self._json_response(self._file_review_dict(key))
 
     def _approve_diff(self) -> None:
-        reviews = []
-        total_pending = 0
-        for fd in self.server.diff_data:
-            plan_file = self.server.repo_root / fd.path
-            review = load_review(plan_file)
-            total_pending += len(review.pending)
-            reviews.append((plan_file, review))
+        review = load_review(self.server.session)
+        keys = [str((self.server.repo_root / fd.path).resolve()) for fd in self.server.diff_data]
 
+        total_pending = sum(len(review.pending_for(k)) for k in keys)
         if total_pending > 0:
             self._json_response(
                 {"error": f"Cannot approve: {total_pending} unresolved comment(s) across files"},
@@ -224,37 +230,40 @@ class ReviewHandler(BaseHTTPRequestHandler):
             )
             return
 
-        for plan_file, review in reviews:
-            review.approve()
-            save_review(plan_file, review)
-
+        for k in keys:
+            review.approve(k)
+        save_review(self.server.session, review)
         self.server.done = True
         self._get_diff()
 
     def _get_diff(self) -> None:
         from dataclasses import asdict
+        review = load_review(self.server.session)
         files = []
         for fd in self.server.diff_data:
-            plan_file = self.server.repo_root / fd.path
-            review = load_review(plan_file)
+            key = str((self.server.repo_root / fd.path).resolve())
+            pending = review.pending_for(key)
+            resolved = review.resolved_for(key)
             files.append({
                 "path": fd.path,
+                "file_path": key,
                 "lines": [asdict(dl) for dl in fd.lines],
                 "review": {
-                    "status": review.status,
-                    "pending": len(review.pending),
-                    "resolved": len(review.resolved),
+                    "status": review.status_for(key),
+                    "pending": len(pending),
+                    "resolved": len(resolved),
                     "comments": [
-                        {"id": c.id, "line": c.line, "text": c.text,
+                        {"id": c.id, "file": c.file, "line": c.line, "text": c.text,
                          "status": c.status, "created": c.created}
-                        for c in review.comments
+                        for c in review.comments_for(key)
                     ],
-                    "approved_at": review.approved_at,
+                    "approved_at": review.approved_at_for(key),
                 },
             })
         self._json_response({
             "files": files,
             "active_file": self.server.active_file,
+            "storage": str(session_dir(self.server.session)),
         })
 
     def _select_file(self) -> None:
@@ -270,6 +279,54 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _quit(self) -> None:
         self.server.done = True
         self._json_response({"ok": True})
+
+
+STORAGE_BAR_CSS = """
+.storage-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 24px; background: #0d1117; border-bottom: 1px solid #21262d;
+  font-size: 12px; color: #8b949e;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+.storage-bar .storage-label { flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.5px; }
+.storage-bar .storage-path {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #e6edf3; user-select: all;
+}
+.storage-bar .storage-copy {
+  flex-shrink: 0; padding: 2px 10px; font-size: 11px;
+  border: 1px solid #30363d; background: #21262d; color: #e6edf3;
+  border-radius: 4px; cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.storage-bar .storage-copy:hover { background: #30363d; }
+.storage-bar .storage-copy.copied { background: #238636; border-color: #2ea043; }
+"""
+
+STORAGE_BAR_JS = """
+async function copyStorage() {
+  const el = document.getElementById('storage-path');
+  if (!el) return;
+  const btn = document.getElementById('storage-copy');
+  try {
+    await navigator.clipboard.writeText(el.textContent);
+  } catch {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    try { document.execCommand('copy'); } catch {}
+    sel.removeAllRanges();
+  }
+  if (btn) {
+    btn.classList.add('copied');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = orig; }, 1200);
+  }
+}
+"""
 
 
 DIFF_HTML_TEMPLATE = """\
@@ -328,6 +385,8 @@ button.btn-danger:hover { background: #da36332e; }
 button.btn-submit { background: #238636; border-color: #2ea043; }
 button.btn-submit:hover { background: #2ea043; }
 button.btn-cancel { background: transparent; border-color: #30363d; }
+
+__STORAGE_BAR_CSS__
 
 /* File tabs */
 .file-tabs {
@@ -540,6 +599,12 @@ button.btn-cancel { background: transparent; border-color: #30363d; }
   <div class="actions" id="header-actions"></div>
 </header>
 
+<div class="storage-bar" id="storage-bar" title="Review comments are stored here">
+  <span class="storage-label">Storage</span>
+  <span class="storage-path" id="storage-path"></span>
+  <button class="storage-copy" id="storage-copy" onclick="copyStorage()">Copy</button>
+</div>
+
 <div class="file-tabs" id="file-tabs"></div>
 
 <div class="main-area sidebar-open" id="main-area">
@@ -631,6 +696,9 @@ function render() {
       `<button onclick="resolveAll()" ${stats.pending === 0 ? 'disabled' : ''}>Resolve All</button>` +
       `<button class="btn-approve" onclick="approveReview()" ${stats.pending > 0 ? 'disabled' : ''}>Approve</button>`;
   }
+
+  // Storage path
+  document.getElementById('storage-path').textContent = state.storage || '';
 
   // File tabs
   const tabsEl = document.getElementById('file-tabs');
@@ -861,6 +929,8 @@ async function quit() {
   await fetch('/api/quit', { method: 'POST' });
   document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8b949e;font-size:16px;">Review closed. You can close this tab.</div>';
 }
+
+__STORAGE_BAR_JS__
 
 // File tree
 function buildTree(files) {
@@ -1115,6 +1185,8 @@ button.btn-cancel {
   border-color: #30363d;
 }
 
+__STORAGE_BAR_CSS__
+
 main {
   margin: 0 auto;
   padding: 16px 24px;
@@ -1268,6 +1340,12 @@ main {
   <div class="actions" id="header-actions"></div>
 </header>
 
+<div class="storage-bar" id="storage-bar" title="Review comments are stored here">
+  <span class="storage-label">Storage</span>
+  <span class="storage-path" id="storage-path"></span>
+  <button class="storage-copy" id="storage-copy" onclick="copyStorage()">Copy</button>
+</div>
+
 <main>
   <div class="file-card" id="file-content"></div>
 </main>
@@ -1298,6 +1376,9 @@ function render() {
 
   document.title = filename;
   document.getElementById('filename').textContent = filename;
+
+  // Storage
+  document.getElementById('storage-path').textContent = state.storage || '';
 
   // Stats
   const statsEl = document.getElementById('stats');
@@ -1489,6 +1570,8 @@ async function quit() {
   document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#8b949e;font-size:16px;">Review closed. You can close this tab.</div>';
 }
 
+__STORAGE_BAR_JS__
+
 // Ctrl+Enter to submit
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'Enter' && activeFormLine !== null) {
@@ -1508,10 +1591,20 @@ fetchReview();
 """
 
 
+# Inject shared storage-bar CSS/JS so both templates stay in sync.
+DIFF_HTML_TEMPLATE = DIFF_HTML_TEMPLATE.replace("__STORAGE_BAR_CSS__", STORAGE_BAR_CSS).replace(
+    "__STORAGE_BAR_JS__", STORAGE_BAR_JS,
+)
+HTML_TEMPLATE = HTML_TEMPLATE.replace("__STORAGE_BAR_CSS__", STORAGE_BAR_CSS).replace(
+    "__STORAGE_BAR_JS__", STORAGE_BAR_JS,
+)
+
+
 def run_web(plan_file: Path) -> dict:
     """Start a local web server for interactive review and block until done."""
     server = ReviewServer(("127.0.0.1", 0), ReviewHandler)
     server.plan_file = plan_file
+    server.session = plan_file
     server.timeout = 0.5
 
     port = server.server_address[1]
@@ -1529,20 +1622,23 @@ def run_web(plan_file: Path) -> dict:
         server.server_close()
 
     review = load_review(plan_file)
+    key = str(plan_file.resolve())
     return {
-        "status": review.status,
-        "pending": len(review.pending),
-        "resolved": len(review.resolved),
+        "status": review.status_for(key),
+        "pending": len(review.pending_for(key)),
+        "resolved": len(review.resolved_for(key)),
     }
 
 
 def run_diff_web(file_diffs: list[FileDiff]) -> dict:
     """Start a local web server for interactive diff review and block until done."""
+    repo_root = Path.cwd()
     server = ReviewServer(("127.0.0.1", 0), ReviewHandler)
     server.mode = "diff"
     server.diff_data = file_diffs
     server.active_file = file_diffs[0].path if file_diffs else ""
-    server.repo_root = Path.cwd()
+    server.repo_root = repo_root
+    server.session = repo_root
     server.done = False
     server.timeout = 0.5
 
@@ -1560,14 +1656,15 @@ def run_diff_web(file_diffs: list[FileDiff]) -> dict:
     finally:
         server.server_close()
 
+    review = load_review(repo_root)
     total_pending = 0
     total_resolved = 0
     all_approved = True
     for fd in file_diffs:
-        review = load_review(server.repo_root / fd.path)
-        total_pending += len(review.pending)
-        total_resolved += len(review.resolved)
-        if review.status != "approved":
+        key = str((repo_root / fd.path).resolve())
+        total_pending += len(review.pending_for(key))
+        total_resolved += len(review.resolved_for(key))
+        if review.status_for(key) != "approved":
             all_approved = False
 
     return {
