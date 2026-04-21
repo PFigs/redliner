@@ -8,7 +8,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from redliner.review import load_review, save_review
+from redliner.review import load_review, save_review, session_dir
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -18,9 +18,10 @@ def cmd_show(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     review = load_review(plan_file)
+    key = str(plan_file)
     lines = plan_file.read_text().splitlines()
     comments_by_line: dict[int, list[str]] = {}
-    for c in review.comments:
+    for c in review.comments_for(key):
         tag = ">>>" if c.status == "pending" else "~~~"
         comments_by_line.setdefault(c.line, []).append(f"     {tag} [#{c.id}] {c.text}")
 
@@ -42,7 +43,7 @@ def cmd_comment(args: argparse.Namespace) -> None:
         print(f"Line {args.line} out of range (1-{line_count})", file=sys.stderr)
         sys.exit(1)
 
-    comment = review.add_comment(args.line, args.text)
+    comment = review.add_comment(str(plan_file), args.line, args.text)
     save_review(plan_file, review)
     print(f"Added comment #{comment.id} at line {args.line}")
 
@@ -50,14 +51,16 @@ def cmd_comment(args: argparse.Namespace) -> None:
 def cmd_list(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     review = load_review(plan_file)
+    key = str(plan_file)
+    file_comments = review.comments_for(key)
 
-    if not review.comments:
+    if not file_comments:
         print("No comments.")
         return
 
     lines = plan_file.read_text().splitlines() if plan_file.exists() else []
 
-    for c in review.comments:
+    for c in file_comments:
         status_tag = "pending" if c.status == "pending" else "resolved"
         print(f"[#{c.id}] Line {c.line} ({status_tag})")
         print(f'  "{c.text}"')
@@ -91,7 +94,7 @@ def cmd_delete(args: argparse.Namespace) -> None:
 def cmd_resolve_all(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     review = load_review(plan_file)
-    count = review.resolve_all()
+    count = review.resolve_all(file=str(plan_file))
     save_review(plan_file, review)
     print(f"Resolved {count} comment(s)")
 
@@ -99,10 +102,11 @@ def cmd_resolve_all(args: argparse.Namespace) -> None:
 def cmd_approve(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     review = load_review(plan_file)
-    if not review.approve():
-        pending = len(review.pending)
-        print(f"Cannot approve: {pending} unresolved comment(s)", file=sys.stderr)
-        for c in review.pending:
+    key = str(plan_file)
+    if not review.approve(key):
+        pending = review.pending_for(key)
+        print(f"Cannot approve: {len(pending)} unresolved comment(s)", file=sys.stderr)
+        for c in pending:
             print(f"  [#{c.id}] Line {c.line}: {c.text}", file=sys.stderr)
         sys.exit(1)
     save_review(plan_file, review)
@@ -112,14 +116,19 @@ def cmd_approve(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     review = load_review(plan_file)
+    key = str(plan_file)
+    pending = review.pending_for(key)
+    resolved = review.resolved_for(key)
     data: dict = {
-        "status": review.status,
-        "pending": len(review.pending),
-        "resolved": len(review.resolved),
-        "total": len(review.comments),
+        "status": review.status_for(key),
+        "pending": len(pending),
+        "resolved": len(resolved),
+        "total": len(pending) + len(resolved),
+        "storage": str(session_dir(plan_file)),
     }
-    if review.approved_at:
-        data["approved_at"] = review.approved_at
+    approved_at = review.approved_at_for(key)
+    if approved_at:
+        data["approved_at"] = approved_at
     print(json.dumps(data))
 
 
