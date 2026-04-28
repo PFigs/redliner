@@ -58,6 +58,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._delete_comment(int(m.group(1)))
         elif m := re.match(r"^/api/edit/(\d+)$", self.path):
             self._edit_comment(int(m.group(1)))
+        elif self.path == "/api/edit-content":
+            self._save_edit_content()
+        elif self.path == "/api/clear-edit":
+            self._clear_edit()
         else:
             self._not_found()
 
@@ -127,12 +131,19 @@ class ReviewHandler(BaseHTTPRequestHandler):
         plan_file = self._active_plan_file()
         key = self._active_key()
         lines = plan_file.read_text().splitlines() if plan_file.exists() else []
+        review = load_review(self.server.session)
+        edit = review.get_edit(key)
         self._json_response({
             "filename": plan_file.name,
             "file_path": key,
             "storage": str(session_dir(self.server.session)),
             "lines": lines,
             "review": self._file_review_dict(key),
+            "edit": (
+                {"content": edit.content, "diff": edit.diff, "saved": edit.saved}
+                if edit
+                else None
+            ),
         })
 
     def _add_comment(self) -> None:
@@ -188,6 +199,32 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._get_diff()
         else:
             self._json_response(self._file_review_dict(self._active_key()))
+
+    def _save_edit_content(self) -> None:
+        if self.server.mode != "plan":
+            self._json_response({"error": "editing only available in plan mode"}, 400)
+            return
+        body = self._read_body()
+        content = body.get("content")
+        if not isinstance(content, str):
+            self._json_response({"error": "content (string) required"}, 400)
+            return
+        plan_file = self._active_plan_file()
+        key = self._active_key()
+        review = load_review(self.server.session)
+        original = plan_file.read_text() if plan_file.exists() else ""
+        review.set_edit(file=key, content=content, original=original)
+        save_review(self.server.session, review)
+        self._get_review()
+
+    def _clear_edit(self) -> None:
+        if self.server.mode != "plan":
+            self._json_response({"error": "editing only available in plan mode"}, 400)
+            return
+        review = load_review(self.server.session)
+        review.clear_edit(self._active_key())
+        save_review(self.server.session, review)
+        self._get_review()
 
     def _resolve_all(self) -> None:
         review = load_review(self.server.session)
