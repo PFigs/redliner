@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -26,6 +27,18 @@ class Comment:
 
 
 @dataclass
+class Edit:
+    file: str
+    content: str
+    diff: str
+    saved: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.saved:
+            self.saved = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass
 class FileState:
     status: str = "in_review"  # "in_review" | "approved"
     approved_at: str | None = None
@@ -37,6 +50,7 @@ class Review:
 
     comments: list[Comment] = field(default_factory=list)
     files: dict[str, FileState] = field(default_factory=dict)
+    edits: dict[str, Edit] = field(default_factory=dict)
 
     def _ensure_file(self, file: str) -> FileState:
         state = self.files.get(file)
@@ -84,6 +98,26 @@ class Review:
                 c.text = text
                 return c
         return None
+
+    def set_edit(self, file: str, content: str, original: str) -> Edit:
+        diff = "".join(
+            difflib.unified_diff(
+                original.splitlines(keepends=True),
+                content.splitlines(keepends=True),
+                fromfile=file,
+                tofile=file,
+                lineterm="",
+            )
+        )
+        edit = Edit(file=file, content=content, diff=diff)
+        self.edits[file] = edit
+        return edit
+
+    def get_edit(self, file: str) -> Edit | None:
+        return self.edits.get(file)
+
+    def clear_edit(self, file: str) -> Edit | None:
+        return self.edits.pop(file, None)
 
     def resolve_all(self, file: str | None = None) -> int:
         count = 0

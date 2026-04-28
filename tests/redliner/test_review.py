@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from redliner.review import Review, load_review, save_review
+from redliner.review import Edit, Review, load_review, save_review
 
 
 FILE = "/tmp/plan.md"
@@ -103,3 +103,56 @@ def test_approve_is_per_file(tmp_path, monkeypatch):
     assert review.approve(file_b) is False
     assert review.status_for(file_a) == "approved"
     assert review.status_for(file_b) == "in_review"
+
+
+def test_edit_dataclass_sets_saved_timestamp():
+    e = Edit(file="/tmp/p.md", content="hello\n", diff="")
+    assert e.saved  # ISO timestamp set in __post_init__
+
+
+def test_edit_dataclass_preserves_explicit_saved():
+    e = Edit(file="/tmp/p.md", content="x", diff="", saved="2026-04-29T00:00:00+00:00")
+    assert e.saved == "2026-04-29T00:00:00+00:00"
+
+
+def test_set_edit_stores_content_and_computes_diff():
+    review = Review()
+    edit = review.set_edit(file=FILE, content="line1\nline2-edited\n", original="line1\nline2\n")
+    assert edit.file == FILE
+    assert edit.content == "line1\nline2-edited\n"
+    assert "-line2" in edit.diff
+    assert "+line2-edited" in edit.diff
+    assert review.edits[FILE] is edit
+
+
+def test_set_edit_overwrites_previous_edit_for_same_file():
+    review = Review()
+    review.set_edit(file=FILE, content="v1\n", original="orig\n")
+    review.set_edit(file=FILE, content="v2\n", original="orig\n")
+    assert review.edits[FILE].content == "v2\n"
+    assert len(review.edits) == 1
+
+
+def test_get_edit_returns_none_when_missing():
+    review = Review()
+    assert review.get_edit(FILE) is None
+
+
+def test_get_edit_returns_stored_edit():
+    review = Review()
+    review.set_edit(file=FILE, content="x\n", original="y\n")
+    assert review.get_edit(FILE) is not None
+    assert review.get_edit(FILE).content == "x\n"
+
+
+def test_clear_edit_removes_and_returns_edit():
+    review = Review()
+    review.set_edit(file=FILE, content="x\n", original="y\n")
+    removed = review.clear_edit(FILE)
+    assert removed is not None
+    assert FILE not in review.edits
+
+
+def test_clear_edit_returns_none_when_missing():
+    review = Review()
+    assert review.clear_edit(FILE) is None
