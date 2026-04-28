@@ -153,3 +153,56 @@ def test_clear_edit_removes_and_returns_edit():
 def test_clear_edit_returns_none_when_missing():
     review = Review()
     assert review.clear_edit(FILE) is None
+
+
+def test_save_and_load_roundtrip_edits(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\nb\nc\n")
+    key = str(plan.resolve())
+
+    review = Review()
+    review.set_edit(file=key, content="a\nB\nc\n", original="a\nb\nc\n")
+    save_review(plan, review)
+
+    loaded = load_review(plan)
+    assert key in loaded.edits
+    assert loaded.edits[key].content == "a\nB\nc\n"
+    assert "-b" in loaded.edits[key].diff
+    assert "+B" in loaded.edits[key].diff
+
+
+def test_save_with_no_edits_does_not_create_jsonl(tmp_path, monkeypatch):
+    from redliner.review import edits_path
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    review = Review()
+    review.add_comment(str(plan.resolve()), 1, "c")
+    save_review(plan, review)
+    assert not edits_path(plan).exists()
+
+
+def test_save_after_clear_edit_removes_jsonl(tmp_path, monkeypatch):
+    from redliner.review import edits_path
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    key = str(plan.resolve())
+    review = Review()
+    review.set_edit(file=key, content="b\n", original="a\n")
+    save_review(plan, review)
+    assert edits_path(plan).exists()
+
+    review.clear_edit(key)
+    save_review(plan, review)
+    assert not edits_path(plan).exists()
+
+
+def test_load_with_no_edits_jsonl_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    loaded = load_review(plan)
+    assert loaded.edits == {}
