@@ -121,9 +121,9 @@ The toggle is hidden in the diff template. State lives in a JS variable `mode` (
 
 **Comment mode (default).** Identical to current behavior, with one addition: if `state.edit` is non-null, a banner appears above the file content:
 
-> Plan edited — N lines changed in saved version.
+> Plan edited — +A / -R lines in saved version.
 
-Where N is the number of `+`/`-` lines in the unified diff (excluding the `---`/`+++` header). The banner is informational only; clicking does nothing in v1.
+Where A is the count of `+` lines and R the count of `-` lines in the unified diff body (excluding the `---`/`+++` file header lines). The banner is informational only; clicking does nothing in v1.
 
 **Edit mode.** The file content area is replaced with a single full-height `<textarea>` containing:
 - `state.edit.content` if it exists
