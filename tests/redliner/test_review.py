@@ -1,7 +1,4 @@
-from pathlib import Path
-
 from redliner.review import Edit, Review, load_review, save_review
-
 
 FILE = "/tmp/plan.md"
 
