@@ -1,7 +1,4 @@
-from pathlib import Path
-
-from redliner.review import Review, load_review, save_review
-
+from redliner.review import Edit, Review, load_review, save_review
 
 FILE = "/tmp/plan.md"
 
@@ -103,3 +100,118 @@ def test_approve_is_per_file(tmp_path, monkeypatch):
     assert review.approve(file_b) is False
     assert review.status_for(file_a) == "approved"
     assert review.status_for(file_b) == "in_review"
+
+
+def test_edit_dataclass_sets_saved_timestamp():
+    e = Edit(file="/tmp/p.md", content="hello\n", diff="")
+    assert e.saved  # ISO timestamp set in __post_init__
+
+
+def test_edit_dataclass_preserves_explicit_saved():
+    e = Edit(file="/tmp/p.md", content="x", diff="", saved="2026-04-29T00:00:00+00:00")
+    assert e.saved == "2026-04-29T00:00:00+00:00"
+
+
+def test_set_edit_stores_content_and_computes_diff():
+    review = Review()
+    edit = review.set_edit(file=FILE, content="line1\nline2-edited\n", original="line1\nline2\n")
+    assert edit.file == FILE
+    assert edit.content == "line1\nline2-edited\n"
+    assert "-line2" in edit.diff
+    assert "+line2-edited" in edit.diff
+    assert review.edits[FILE] is edit
+
+
+def test_set_edit_diff_has_well_formed_headers():
+    review = Review()
+    edit = review.set_edit(file=FILE, content="a\nB\nc\n", original="a\nb\nc\n")
+    lines = edit.diff.splitlines()
+    assert lines[0] == f"--- {FILE}"
+    assert lines[1] == f"+++ {FILE}"
+    assert lines[2].startswith("@@")
+
+
+def test_set_edit_overwrites_previous_edit_for_same_file():
+    review = Review()
+    review.set_edit(file=FILE, content="v1\n", original="orig\n")
+    review.set_edit(file=FILE, content="v2\n", original="orig\n")
+    assert review.edits[FILE].content == "v2\n"
+    assert len(review.edits) == 1
+
+
+def test_get_edit_returns_none_when_missing():
+    review = Review()
+    assert review.get_edit(FILE) is None
+
+
+def test_get_edit_returns_stored_edit():
+    review = Review()
+    review.set_edit(file=FILE, content="x\n", original="y\n")
+    assert review.get_edit(FILE) is not None
+    assert review.get_edit(FILE).content == "x\n"
+
+
+def test_clear_edit_removes_and_returns_edit():
+    review = Review()
+    review.set_edit(file=FILE, content="x\n", original="y\n")
+    removed = review.clear_edit(FILE)
+    assert removed is not None
+    assert FILE not in review.edits
+
+
+def test_clear_edit_returns_none_when_missing():
+    review = Review()
+    assert review.clear_edit(FILE) is None
+
+
+def test_save_and_load_roundtrip_edits(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\nb\nc\n")
+    key = str(plan.resolve())
+
+    review = Review()
+    review.set_edit(file=key, content="a\nB\nc\n", original="a\nb\nc\n")
+    save_review(plan, review)
+
+    loaded = load_review(plan)
+    assert key in loaded.edits
+    assert loaded.edits[key].content == "a\nB\nc\n"
+    assert "-b" in loaded.edits[key].diff
+    assert "+B" in loaded.edits[key].diff
+
+
+def test_save_with_no_edits_does_not_create_jsonl(tmp_path, monkeypatch):
+    from redliner.review import edits_path
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    review = Review()
+    review.add_comment(str(plan.resolve()), 1, "c")
+    save_review(plan, review)
+    assert not edits_path(plan).exists()
+
+
+def test_save_after_clear_edit_removes_jsonl(tmp_path, monkeypatch):
+    from redliner.review import edits_path
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    key = str(plan.resolve())
+    review = Review()
+    review.set_edit(file=key, content="b\n", original="a\n")
+    save_review(plan, review)
+    assert edits_path(plan).exists()
+
+    review.clear_edit(key)
+    save_review(plan, review)
+    assert not edits_path(plan).exists()
+
+
+def test_load_with_no_edits_jsonl_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\n")
+    loaded = load_review(plan)
+    assert loaded.edits == {}

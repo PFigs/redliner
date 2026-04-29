@@ -8,7 +8,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from redliner.review import load_review, save_review, session_dir
+from redliner.review import edits_path, load_review, save_review, session_dir
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -119,17 +119,32 @@ def cmd_status(args: argparse.Namespace) -> None:
     key = str(plan_file)
     pending = review.pending_for(key)
     resolved = review.resolved_for(key)
+    edit = review.get_edit(key)
     data: dict = {
         "status": review.status_for(key),
         "pending": len(pending),
         "resolved": len(resolved),
         "total": len(pending) + len(resolved),
         "storage": str(session_dir(plan_file)),
+        "has_edits": edit is not None,
     }
+    if edit is not None:
+        data["edits_path"] = str(edits_path(plan_file))
     approved_at = review.approved_at_for(key)
     if approved_at:
         data["approved_at"] = approved_at
     print(json.dumps(data))
+
+
+def cmd_edits(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    review = load_review(plan_file)
+    key = str(plan_file)
+    edit = review.get_edit(key)
+    if edit is None:
+        print(f"No edits for {plan_file}", file=sys.stderr)
+        sys.exit(1)
+    print(edit.diff, end="")
 
 
 def cmd_open(args: argparse.Namespace) -> None:
@@ -220,6 +235,11 @@ def main() -> None:
     p = sub.add_parser("status", help="Show review status")
     p.add_argument("file", help="Path to plan file")
     p.set_defaults(func=cmd_status)
+
+    # edits
+    p = sub.add_parser("edits", help="Print the unified diff of saved edits")
+    p.add_argument("file", help="Path to plan file")
+    p.set_defaults(func=cmd_edits)
 
     # open
     p = sub.add_parser("open", help="Open web review in browser")
