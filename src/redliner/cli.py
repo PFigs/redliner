@@ -13,14 +13,37 @@ from redliner.review import edits_path, load_review, save_review, session_dir
 
 def cmd_show(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
-    if not plan_file.exists():
+    if not plan_file.exists() and args.version is None:
         print(f"File not found: {plan_file}", file=sys.stderr)
         sys.exit(1)
 
     review = load_review(plan_file)
     key = str(plan_file)
+
+    if args.version is not None:
+        try:
+            content = review.version_content(key, args.version)
+        except ValueError:
+            print(f"Version {args.version} not found", file=sys.stderr)
+            sys.exit(1)
+        if args.diff:
+            if args.version == 0:
+                print(content, end="")
+                return
+            print(review.version_diff(key, args.version), end="")
+            return
+        comments_by_line: dict[int, list[str]] = {}
+        for c in review.comments_for_version(key, args.version):
+            tag = ">>>" if c.status == "pending" else "~~~"
+            comments_by_line.setdefault(c.line, []).append(f"     {tag} [#{c.id}] {c.text}")
+        for i, line in enumerate(content.splitlines(), 1):
+            print(f"{i:4d} | {line}")
+            for cl in comments_by_line.get(i, []):
+                print(cl)
+        return
+
     lines = plan_file.read_text().splitlines()
-    comments_by_line: dict[int, list[str]] = {}
+    comments_by_line = {}
     for c in review.comments_for(key):
         tag = ">>>" if c.status == "pending" else "~~~"
         comments_by_line.setdefault(c.line, []).append(f"     {tag} [#{c.id}] {c.text}")
@@ -147,6 +170,43 @@ def cmd_edits(args: argparse.Namespace) -> None:
     print(edit.diff, end="")
 
 
+def cmd_snapshot(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    if not plan_file.exists():
+        print(f"File not found: {plan_file}", file=sys.stderr)
+        sys.exit(1)
+    review = load_review(plan_file)
+    key = str(plan_file)
+    edit = review.get_edit(key)
+    if edit is not None:
+        content = edit.content
+    else:
+        head = review.head_version(key)
+        try:
+            content = review.version_content(key, head)
+        except ValueError:
+            print(f"No baseline content available for {plan_file}", file=sys.stderr)
+            sys.exit(1)
+    new_version = review.snapshot(key, content)
+    save_review(plan_file, review)
+    print(f"Created v{new_version.version} at {new_version.created}")
+
+
+def cmd_versions(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    review = load_review(plan_file)
+    key = str(plan_file)
+    vlist = review.versions.get(key, [])
+    if not vlist:
+        print("No versions.")
+        return
+    for v in vlist:
+        comments = review.comments_for_version(key, v.version)
+        pending = sum(1 for c in comments if c.status == "pending")
+        resolved = sum(1 for c in comments if c.status == "resolved")
+        print(f"v{v.version}  {v.created}  {pending} pending  {resolved} resolved")
+
+
 def cmd_open(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     if not plan_file.exists():
@@ -195,6 +255,8 @@ def main() -> None:
     # show
     p = sub.add_parser("show", help="Display plan with line numbers and comments")
     p.add_argument("file", help="Path to plan file")
+    p.add_argument("--version", type=int, default=None, help="Show document at this version")
+    p.add_argument("--diff", action="store_true", help="With --version, show diff vs previous version")
     p.set_defaults(func=cmd_show)
 
     # comment
@@ -240,6 +302,16 @@ def main() -> None:
     p = sub.add_parser("edits", help="Print the unified diff of saved edits")
     p.add_argument("file", help="Path to plan file")
     p.set_defaults(func=cmd_edits)
+
+    # snapshot
+    p = sub.add_parser("snapshot", help="Create a new sealed version of a plan")
+    p.add_argument("file", help="Path to plan file")
+    p.set_defaults(func=cmd_snapshot)
+
+    # versions
+    p = sub.add_parser("versions", help="List versions of a plan")
+    p.add_argument("file", help="Path to plan file")
+    p.set_defaults(func=cmd_versions)
 
     # open
     p = sub.add_parser("open", help="Open web review in browser")

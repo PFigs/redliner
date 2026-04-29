@@ -20,6 +20,7 @@ class Comment:
     text: str
     status: str = "pending"  # "pending" | "resolved"
     created: str = ""
+    version: int = 0
 
     def __post_init__(self) -> None:
         if not self.created:
@@ -39,6 +40,18 @@ class Edit:
 
 
 @dataclass
+class Version:
+    file: str
+    version: int
+    content: str
+    created: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.created:
+            self.created = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass
 class FileState:
     status: str = "in_review"  # "in_review" | "approved"
     approved_at: str | None = None
@@ -51,6 +64,7 @@ class Review:
     comments: list[Comment] = field(default_factory=list)
     files: dict[str, FileState] = field(default_factory=dict)
     edits: dict[str, Edit] = field(default_factory=dict)
+    versions: dict[str, list[Version]] = field(default_factory=dict)
 
     def _ensure_file(self, file: str) -> FileState:
         state = self.files.get(file)
@@ -73,8 +87,9 @@ class Review:
     def resolved_for(self, file: str) -> list[Comment]:
         return [c for c in self.comments_for(file) if c.status == "resolved"]
 
-    def add_comment(self, file: str, line: int, text: str) -> Comment:
-        comment = Comment(id=self.next_id(), file=file, line=line, text=text)
+    def add_comment(self, file: str, line: int, text: str, version: int | None = None) -> Comment:
+        v = self.head_version(file) if version is None else version
+        comment = Comment(id=self.next_id(), file=file, line=line, text=text, version=v)
         self.comments.append(comment)
         self._ensure_file(file).status = "in_review"
         return comment
@@ -143,6 +158,42 @@ class Review:
         state = self.files.get(file)
         return state.approved_at if state else None
 
+    def head_version(self, file: str) -> int:
+        vlist = self.versions.get(file)
+        if not vlist:
+            return 0
+        return max(v.version for v in vlist)
+
+    def snapshot(self, file: str, content: str) -> Version:
+        vlist = self.versions.setdefault(file, [])
+        next_num = (max((v.version for v in vlist), default=-1)) + 1
+        new = Version(file=file, version=next_num, content=content)
+        vlist.append(new)
+        return new
+
+    def version_content(self, file: str, n: int) -> str:
+        for v in self.versions.get(file, []):
+            if v.version == n:
+                return v.content
+        raise ValueError(f"version {n} not found for {file}")
+
+    def version_diff(self, file: str, n: int) -> str:
+        if n <= 0:
+            raise ValueError(f"version {n} has no previous version to diff against")
+        prev = self.version_content(file, n - 1)
+        curr = self.version_content(file, n)
+        return "".join(
+            difflib.unified_diff(
+                prev.splitlines(keepends=True),
+                curr.splitlines(keepends=True),
+                fromfile=f"{file}@v{n - 1}",
+                tofile=f"{file}@v{n}",
+            )
+        )
+
+    def comments_for_version(self, file: str, n: int) -> list[Comment]:
+        return [c for c in self.comments if c.file == file and c.version == n]
+
 
 def _data_dir() -> Path:
     """Return the XDG data directory for redliner."""
@@ -177,6 +228,10 @@ def edits_path(session: Path) -> Path:
     return session_dir(session) / "edits.jsonl"
 
 
+def versions_path(session: Path) -> Path:
+    return session_dir(session) / "versions.jsonl"
+
+
 def load_review(session: Path) -> Review:
     review = Review()
     cpath = comments_path(session)
@@ -199,6 +254,33 @@ def load_review(session: Path) -> Review:
                 continue
             e = Edit(**json.loads(line))
             review.edits[e.file] = e
+    vpath = versions_path(session)
+    if vpath.exists():
+        for raw in vpath.read_text().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            v = Version(**json.loads(line))
+            review.versions.setdefault(v.file, []).append(v)
+        for vlist in review.versions.values():
+            vlist.sort(key=lambda v: v.version)
+    else:
+        # Synthesize v0 from the file on disk; fall back to existing edit content
+        # if the file is no longer readable. If neither is available, leave versions
+        # empty (callers see head_version() == 0 and version_content() raises).
+        key = str(session.resolve())
+        content: str | None = None
+        try:
+            if session.is_file():
+                content = session.read_text()
+        except OSError:
+            content = None
+        if content is None:
+            existing = review.edits.get(key)
+            if existing is not None:
+                content = existing.content
+        if content is not None:
+            review.versions[key] = [Version(file=key, version=0, content=content)]
     return review
 
 
@@ -220,3 +302,12 @@ def save_review(session: Path, review: Review) -> None:
         epath.write_text("\n".join(edit_lines) + "\n")
     elif epath.exists():
         epath.unlink()
+    vpath = versions_path(session)
+    if review.versions:
+        version_lines: list[str] = []
+        for vlist in review.versions.values():
+            for v in vlist:
+                version_lines.append(json.dumps(asdict(v)))
+        vpath.write_text("\n".join(version_lines) + "\n")
+    elif vpath.exists():
+        vpath.unlink()

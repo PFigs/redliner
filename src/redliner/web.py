@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from redliner.diff import FileDiff
 from redliner.review import load_review, save_review, session_dir
@@ -21,6 +23,11 @@ class ReviewServer(HTTPServer):
     active_file: str = ""
     repo_root: Path = Path(".")
     session: Path = Path(".")
+    snapshot_lock: threading.Lock
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.snapshot_lock = threading.Lock()
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -38,6 +45,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._get_review()
         elif self.path == "/api/diff" and self.server.mode == "diff":
             self._get_diff()
+        elif self.path.startswith("/api/versions"):
+            # Plural must precede singular: both startswith match.
+            self._get_versions()
+        elif self.path.startswith("/api/version"):
+            self._get_version()
         else:
             self._not_found()
 
@@ -62,6 +74,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._save_edit_content()
         elif self.path == "/api/clear-edit":
             self._clear_edit()
+        elif self.path == "/api/snapshot":
+            self._snapshot()
         else:
             self._not_found()
 
@@ -93,6 +107,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _active_key(self) -> str:
         return str(self._active_plan_file().resolve())
+
+    def _resolve_file_param(self, file_param: str | None) -> str:
+        if file_param:
+            return str(Path(file_param).resolve())
+        return self._active_key()
+
+    def _parse_query(self) -> dict[str, str]:
+        qs = parse_qs(urlparse(self.path).query)
+        return {k: v[0] for k, v in qs.items() if v}
 
     def _file_review_dict(self, file_key: str) -> dict:
         review = load_review(self.server.session)
@@ -148,6 +171,59 @@ class ReviewHandler(BaseHTTPRequestHandler):
             ),
         })
 
+    def _get_versions(self) -> None:
+        params = self._parse_query()
+        file_key = self._resolve_file_param(params.get("file"))
+        review = load_review(self.server.session)
+        vlist = review.versions.get(file_key, [])
+        result = []
+        for v in vlist:
+            comments = review.comments_for_version(file_key, v.version)
+            pending = sum(1 for c in comments if c.status == "pending")
+            resolved = sum(1 for c in comments if c.status == "resolved")
+            result.append({
+                "version": v.version,
+                "created": v.created,
+                "pending": pending,
+                "resolved": resolved,
+            })
+        self._json_response({"versions": result})
+
+    def _get_version(self) -> None:
+        params = self._parse_query()
+        file_key = self._resolve_file_param(params.get("file"))
+        try:
+            n = int(params.get("n", "0"))
+        except ValueError:
+            self._json_response({"error": "n must be an integer"}, 400)
+            return
+        view = params.get("view", "full")
+        if view not in ("diff", "full"):
+            self._json_response({"error": "view must be 'diff' or 'full'"}, 400)
+            return
+        review = load_review(self.server.session)
+        try:
+            content = review.version_content(file_key, n)
+        except ValueError:
+            self._json_response({"error": f"version {n} not found"}, 404)
+            return
+        diff = ""
+        if view == "diff" and n > 0:
+            diff = review.version_diff(file_key, n)
+        comments = [
+            {
+                "id": c.id,
+                "file": c.file,
+                "line": c.line,
+                "text": c.text,
+                "status": c.status,
+                "created": c.created,
+                "version": c.version,
+            }
+            for c in review.comments_for_version(file_key, n)
+        ]
+        self._json_response({"content": content, "diff": diff, "comments": comments})
+
     def _add_comment(self) -> None:
         body = self._read_body()
         line = body.get("line")
@@ -157,7 +233,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         key = self._active_key()
         review = load_review(self.server.session)
-        review.add_comment(key, line, text)
+        version = body.get("version")
+        if version is not None:
+            if not isinstance(version, int):
+                self._json_response({"error": "version must be an integer"}, 400)
+                return
+            valid = {v.version for v in review.versions.get(key, [])}
+            if version not in valid:
+                self._json_response({"error": f"version {version} not found"}, 400)
+                return
+        review.add_comment(key, line, text, version=version)
         save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()
@@ -214,7 +299,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
         plan_file = self._active_plan_file()
         key = self._active_key()
         review = load_review(self.server.session)
-        original = plan_file.read_text() if plan_file.exists() else ""
+        head = review.head_version(key)
+        try:
+            original = review.version_content(key, head)
+        except ValueError:
+            original = plan_file.read_text() if plan_file.exists() else ""
         review.set_edit(file=key, content=content, original=original)
         save_review(self.server.session, review)
         self._get_review()
@@ -227,6 +316,32 @@ class ReviewHandler(BaseHTTPRequestHandler):
         review.clear_edit(self._active_key())
         save_review(self.server.session, review)
         self._get_review()
+
+    def _snapshot(self) -> None:
+        if self.server.mode != "plan":
+            self._json_response({"error": "snapshots only available in plan mode"}, 400)
+            return
+        body = self._read_body()
+        file_key = self._resolve_file_param(body.get("file"))
+        with self.server.snapshot_lock:
+            review = load_review(self.server.session)
+            edit = review.get_edit(file_key)
+            if edit is not None:
+                content = edit.content
+            else:
+                head = review.head_version(file_key)
+                try:
+                    content = review.version_content(file_key, head)
+                except ValueError:
+                    self._json_response({"error": "no baseline content available"}, 400)
+                    return
+            new_version = review.snapshot(file_key, content)
+            save_review(self.server.session, review)
+        self._json_response({
+            "version": new_version.version,
+            "created": new_version.created,
+            "content": new_version.content,
+        })
 
     def _resolve_all(self) -> None:
         review = load_review(self.server.session)
@@ -1214,6 +1329,56 @@ header.approved {
 }
 .mode-toggle button:hover:not(.active) { background: #161b22; color: #e6edf3; }
 
+.version-picker { display: flex; align-items: center; gap: 8px; position: relative; }
+.version-btn {
+  background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  padding: 4px 10px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.version-btn:hover { background: #30363d; }
+.version-menu {
+  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  min-width: 320px; max-height: 400px; overflow: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 10;
+}
+.version-menu.hidden { display: none; }
+.version-menu .item {
+  padding: 8px 12px; cursor: pointer; display: flex; gap: 12px; align-items: center;
+  border-bottom: 1px solid #21262d;
+}
+.version-menu .item:hover { background: #21262d; }
+.version-menu .item .num { font-weight: 600; min-width: 90px; }
+.version-menu .item .ts { color: #8b949e; font-size: 0.85em; flex: 1; }
+.version-menu .item .counts { color: #8b949e; font-size: 0.85em; }
+.version-action {
+  background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  padding: 4px 10px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.version-action.hidden { display: none; }
+.view-toggle { display: inline-flex; border: 1px solid #30363d; border-radius: 4px; overflow: hidden; }
+.view-toggle.hidden { display: none; }
+.view-toggle button {
+  background: #161b22; color: #e6edf3; border: 0; padding: 4px 10px;
+  font: inherit; cursor: pointer;
+}
+.view-toggle button.active { background: #30363d; }
+
+.line-row.historical { cursor: default; }
+.diff-notice {
+  background: #21262d; padding: 6px 10px; margin-bottom: 12px;
+  border-left: 3px solid #d29922; color: #d29922;
+}
+.diff-text {
+  white-space: pre; background: #0d1117; padding: 12px; border-radius: 4px;
+  overflow: auto; margin: 0;
+}
+.diff-comments { margin-top: 12px; }
+.diff-comment-anchor { margin-top: 8px; }
+.diff-comment-line {
+  display: inline-block; color: #8b949e; font-size: 0.85em;
+  margin-right: 8px;
+}
+
 button {
   padding: 5px 16px;
   border-radius: 6px;
@@ -1437,6 +1602,15 @@ main {
 <header id="header">
   <div class="title" id="filename"></div>
   <span class="saved-indicator" id="saved-indicator"></span>
+  <div class="version-picker">
+    <button id="version-btn" class="version-btn" onclick="toggleVersionMenu()">current ▾</button>
+    <div id="version-menu" class="version-menu hidden"></div>
+    <button id="snapshot-btn" class="version-action" onclick="takeSnapshot()">Snapshot</button>
+    <span class="view-toggle hidden" id="view-toggle">
+      <button id="toggle-diff" class="active" onclick="setView('diff')">Diff</button>
+      <button id="toggle-full" onclick="setView('full')">Full</button>
+    </span>
+  </div>
   <div class="stats" id="stats"></div>
   <div class="mode-toggle" id="mode-toggle">
     <button id="mode-comment" onclick="setMode('comment')">Comment</button>
@@ -1460,11 +1634,245 @@ let state = null;
 let activeFormLine = null;
 let mode = 'comment';            // 'comment' | 'edit'
 let editBuffer = null;           // textarea contents while in Edit mode
+let selectedVersion = null;     // null = "current"; integer = past version
+let availableVersions = [];
+let currentView = 'diff';
 
 async function fetchReview() {
   const res = await fetch('/api/review');
   state = await res.json();
   render();
+  await loadVersions();
+}
+
+async function loadVersions() {
+  if (!state || !state.file_path) return;
+  const url = '/api/versions?file=' + encodeURIComponent(state.file_path);
+  const resp = await fetch(url);
+  const data = await resp.json();
+  availableVersions = data.versions || [];
+  renderVersionMenu();
+  updateVersionButton();
+}
+
+function renderVersionMenu() {
+  const menu = document.getElementById('version-menu');
+  if (!menu) return;
+  const head = availableVersions.length ? Math.max(...availableVersions.map(v => v.version)) : 0;
+  const headEntry = availableVersions.find(v => v.version === head) || { pending: 0, resolved: 0 };
+  const items = [];
+  items.push(itemHTML({
+    kind: 'current',
+    label: 'current',
+    ts: '',
+    pending: headEntry.pending,
+    resolved: headEntry.resolved,
+  }));
+  // Versions newest-first.
+  const sorted = [...availableVersions].sort((a, b) => b.version - a.version);
+  for (const v of sorted) {
+    const label = v.version === 0 ? 'v0 baseline' : 'v' + v.version;
+    items.push(itemHTML({
+      kind: 'past',
+      version: v.version,
+      label,
+      ts: v.created,
+      pending: v.pending,
+      resolved: v.resolved,
+    }));
+  }
+  menu.innerHTML = items.join('');
+}
+
+function itemHTML(o) {
+  const onclick = o.kind === 'current'
+    ? "selectVersion(null)"
+    : "selectVersion(" + o.version + ")";
+  const ts = o.ts ? new Date(o.ts).toLocaleString() : '';
+  return '<div class="item" onclick="' + onclick + '">' +
+    '<span class="num">' + o.label + '</span>' +
+    '<span class="ts">' + ts + '</span>' +
+    '<span class="counts">' + o.pending + ' pending, ' + o.resolved + ' resolved</span>' +
+    '</div>';
+}
+
+function updateVersionButton() {
+  const btn = document.getElementById('version-btn');
+  if (!btn) return;
+  btn.textContent = (selectedVersion === null ? 'current' : 'v' + selectedVersion) + ' ▾';
+}
+
+function toggleVersionMenu() {
+  const menu = document.getElementById('version-menu');
+  if (menu) menu.classList.toggle('hidden');
+}
+
+async function selectVersion(n) {
+  selectedVersion = n;
+  document.getElementById('version-menu').classList.add('hidden');
+  updateVersionButton();
+  if (n === null) {
+    document.getElementById('view-toggle').classList.add('hidden');
+    document.getElementById('snapshot-btn').classList.remove('hidden');
+    await fetchReview();
+  } else {
+    if (n === 0) {
+      document.getElementById('view-toggle').classList.add('hidden');
+    } else {
+      document.getElementById('view-toggle').classList.remove('hidden');
+    }
+    document.getElementById('snapshot-btn').classList.add('hidden');
+    await renderHistoricalVersion();
+  }
+  applyHistoricalDisable();
+}
+
+async function renderHistoricalVersion() {
+  const filePath = state && state.file_path ? state.file_path : '';
+  const view = (selectedVersion === 0) ? 'full' : currentView;
+  const url = '/api/version?file=' + encodeURIComponent(filePath) +
+              '&n=' + selectedVersion + '&view=' + view;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    alert('Failed to load v' + selectedVersion + ': ' + resp.status);
+    return;
+  }
+  const data = await resp.json();
+  if (view === 'diff') {
+    renderHistoricalDiff(data.diff, data.comments);
+  } else {
+    renderHistoricalFull(data.content, data.comments);
+  }
+  updateStatsForHistorical(data.comments);
+}
+
+function renderHistoricalFull(content, comments) {
+  const container = document.getElementById('file-content');
+  container.innerHTML = '';
+  const lines = content.split('\\n');
+  // Drop trailing empty entry from terminating newline so line numbers match.
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const byLine = {};
+  for (const c of comments) {
+    (byLine[c.line] ||= []).push(c);
+  }
+  lines.forEach((text, idx) => {
+    const lineNum = idx + 1;
+    const row = document.createElement('div');
+    row.className = 'line-row historical';
+    row.innerHTML =
+      '<span class="line-num">' + lineNum + '</span>' +
+      '<span class="line-text">' + escapeHtml(text) + '</span>';
+    container.appendChild(row);
+    (byLine[lineNum] || []).forEach(c => container.appendChild(renderCommentBlock(c)));
+  });
+}
+
+function renderHistoricalDiff(diffText, comments) {
+  const container = document.getElementById('file-content');
+  container.innerHTML = '';
+
+  // Compute which "new" line numbers are present in the diff so we know
+  // which comments fall inside hunks vs. outside.
+  const visible = new Set();
+  let newLine = 0;
+  for (const raw of diffText.split('\\n')) {
+    if (raw.startsWith('@@')) {
+      const m = raw.match(/\\+(\\d+)/);
+      if (m) newLine = parseInt(m[1]) - 1;
+    } else if (raw.startsWith('+++ ') || raw.startsWith('--- ')) {
+      // header
+    } else if (raw.startsWith('+')) {
+      newLine += 1;
+      visible.add(newLine);
+    } else if (raw.startsWith(' ')) {
+      newLine += 1;
+      visible.add(newLine);
+    } else if (raw.startsWith('-')) {
+      // removed line — does not advance newLine
+    }
+  }
+
+  const visibleComments = comments.filter(c => visible.has(c.line));
+  const hidden = comments.length - visibleComments.length;
+  if (hidden > 0) {
+    const notice = document.createElement('div');
+    notice.className = 'diff-notice';
+    notice.textContent = '(' + hidden + ' comment' + (hidden === 1 ? '' : 's') + ' hidden — switch to Full)';
+    container.appendChild(notice);
+  }
+
+  const pre = document.createElement('pre');
+  pre.className = 'diff-text';
+  pre.textContent = diffText;
+  container.appendChild(pre);
+
+  if (visibleComments.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'diff-comments';
+    for (const c of visibleComments) {
+      const anchor = document.createElement('div');
+      anchor.className = 'diff-comment-anchor';
+      const label = document.createElement('span');
+      label.className = 'diff-comment-line';
+      label.textContent = 'Line ' + c.line + ':';
+      anchor.appendChild(label);
+      anchor.appendChild(renderCommentBlock(c));
+      wrap.appendChild(anchor);
+    }
+    container.appendChild(wrap);
+  }
+}
+
+function updateStatsForHistorical(comments) {
+  const stats = document.getElementById('stats');
+  if (!stats) return;
+  const pending = comments.filter(c => c.status === 'pending').length;
+  const resolved = comments.filter(c => c.status === 'resolved').length;
+  stats.innerHTML =
+    '<span class="badge pending-badge">' + pending + ' pending</span>' +
+    '<span class="badge resolved-badge">' + resolved + ' resolved</span>';
+}
+
+document.addEventListener('click', (e) => {
+  const picker = document.querySelector('.version-picker');
+  if (picker && !picker.contains(e.target)) {
+    const menu = document.getElementById('version-menu');
+    if (menu) menu.classList.add('hidden');
+  }
+});
+
+async function takeSnapshot() {
+  const filePath = state && state.file_path ? state.file_path : '';
+  const resp = await fetch('/api/snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: filePath }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    alert('Snapshot failed: ' + text);
+    return;
+  }
+  await fetchReview();
+}
+
+function setView(view) {
+  currentView = view;
+  document.getElementById('toggle-diff').classList.toggle('active', view === 'diff');
+  document.getElementById('toggle-full').classList.toggle('active', view === 'full');
+  if (selectedVersion !== null) {
+    renderHistoricalVersion();
+  }
+}
+
+function isHistoricalView() {
+  return selectedVersion !== null;
+}
+
+function applyHistoricalDisable() {
+  const editBtn = document.getElementById('mode-edit');
+  if (editBtn) editBtn.disabled = isHistoricalView();
 }
 
 function escapeHtml(s) {
@@ -1473,7 +1881,29 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function renderCommentBlock(c) {
+  const block = document.createElement('div');
+  block.className = 'comment-block ' + c.status;
+  block.setAttribute('data-comment-id', c.id);
+  const actions = c.status === 'pending'
+    ? '<div class="comment-actions">' +
+      '<button onclick="startEdit(' + c.id + ')">Edit</button>' +
+      '<button onclick="resolveComment(' + c.id + ')">Resolve</button>' +
+      '<button class="btn-delete" onclick="deleteComment(' + c.id + ')">Delete</button>' +
+      '</div>'
+    : '<div class="comment-actions">' +
+      '<span class="resolved-tag">Resolved</span>' +
+      '<button class="btn-delete" onclick="deleteComment(' + c.id + ')">Delete</button>' +
+      '</div>';
+  block.innerHTML =
+    '<span class="comment-meta">#' + c.id + '</span>' +
+    '<span class="comment-text">' + escapeHtml(c.text) + '</span>' +
+    actions;
+  return block;
+}
+
 function setMode(next) {
+  if (isHistoricalView()) return;
   if (mode === next) return;
   if (mode === 'edit' && hasUnsavedEdits()) {
     if (!confirm('Discard unsaved edits?')) return;
@@ -1519,9 +1949,16 @@ function render() {
       ? `<span class="badge resolved-badge">Edited</span>`
       : `<span class="badge pending-badge">Editing</span>`;
   } else {
+    // Current view: show head-version's counts so the pill stays in sync with the dropdown.
+    const head = availableVersions.length
+      ? Math.max(...availableVersions.map(v => v.version))
+      : 0;
+    const headEntry = availableVersions.find(v => v.version === head);
+    const pending = headEntry ? headEntry.pending : review.pending;
+    const resolved = headEntry ? headEntry.resolved : review.resolved;
     statsEl.innerHTML =
-      `<span class="badge pending-badge">${review.pending} pending</span>` +
-      `<span class="badge resolved-badge">${review.resolved} resolved</span>`;
+      `<span class="badge pending-badge">${pending} pending</span>` +
+      `<span class="badge resolved-badge">${resolved} resolved</span>`;
   }
 
   // Header actions depend on mode
@@ -1545,10 +1982,12 @@ function render() {
 
   if (mode === 'edit') {
     renderEditMode(container);
+    applyHistoricalDisable();
     return;
   }
 
   renderCommentMode(container, lines, review);
+  applyHistoricalDisable();
 }
 
 function renderEditMode(container) {
@@ -1605,17 +2044,7 @@ function renderCommentMode(container, lines, review) {
     container.appendChild(row);
 
     (commentsByLine[lineNum] || []).forEach(c => {
-      const block = document.createElement('div');
-      block.className = `comment-block ${c.status}`;
-      block.setAttribute('data-comment-id', c.id);
-      const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="startEdit(${c.id})">Edit</button><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
-        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
-      block.innerHTML =
-        `<span class="comment-meta">#${c.id}</span>` +
-        `<span class="comment-text">${escapeHtml(c.text)}</span>` +
-        actions;
-      container.appendChild(block);
+      container.appendChild(renderCommentBlock(c));
     });
 
     if (activeFormLine === lineNum && review.status !== 'approved') {
@@ -1660,6 +2089,7 @@ function countDiffLines(diff) {
 
 function showCommentForm(lineNum) {
   if (state.review.status === 'approved') return;
+  if (isHistoricalView()) return;
   activeFormLine = activeFormLine === lineNum ? null : lineNum;
   render();
   if (activeFormLine !== null) {
@@ -1705,13 +2135,23 @@ async function submitComment(lineNum) {
 async function resolveComment(id) {
   const res = await fetch(`/api/resolve/${id}`, { method: 'POST' });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 async function deleteComment(id) {
   const res = await fetch(`/api/delete/${id}`, { method: 'POST' });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 function startEdit(id) {
@@ -1745,7 +2185,12 @@ async function saveEdit(id) {
     body: JSON.stringify({ text }),
   });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 function cancelEdit(id) {
