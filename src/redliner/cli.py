@@ -13,14 +13,37 @@ from redliner.review import edits_path, load_review, save_review, session_dir
 
 def cmd_show(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
-    if not plan_file.exists():
+    if not plan_file.exists() and args.version is None:
         print(f"File not found: {plan_file}", file=sys.stderr)
         sys.exit(1)
 
     review = load_review(plan_file)
     key = str(plan_file)
+
+    if args.version is not None:
+        try:
+            content = review.version_content(key, args.version)
+        except ValueError:
+            print(f"Version {args.version} not found", file=sys.stderr)
+            sys.exit(1)
+        if args.diff:
+            if args.version == 0:
+                print(content, end="")
+                return
+            print(review.version_diff(key, args.version), end="")
+            return
+        comments_by_line: dict[int, list[str]] = {}
+        for c in review.comments_for_version(key, args.version):
+            tag = ">>>" if c.status == "pending" else "~~~"
+            comments_by_line.setdefault(c.line, []).append(f"     {tag} [#{c.id}] {c.text}")
+        for i, line in enumerate(content.splitlines(), 1):
+            print(f"{i:4d} | {line}")
+            for cl in comments_by_line.get(i, []):
+                print(cl)
+        return
+
     lines = plan_file.read_text().splitlines()
-    comments_by_line: dict[int, list[str]] = {}
+    comments_by_line = {}
     for c in review.comments_for(key):
         tag = ">>>" if c.status == "pending" else "~~~"
         comments_by_line.setdefault(c.line, []).append(f"     {tag} [#{c.id}] {c.text}")
@@ -231,6 +254,8 @@ def main() -> None:
     # show
     p = sub.add_parser("show", help="Display plan with line numbers and comments")
     p.add_argument("file", help="Path to plan file")
+    p.add_argument("--version", type=int, default=None, help="Show document at this version")
+    p.add_argument("--diff", action="store_true", help="With --version, show diff vs previous version")
     p.set_defaults(func=cmd_show)
 
     # comment
