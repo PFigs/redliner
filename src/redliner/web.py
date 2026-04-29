@@ -2119,13 +2119,23 @@ async function submitComment(lineNum) {
 async function resolveComment(id) {
   const res = await fetch(`/api/resolve/${id}`, { method: 'POST' });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 async function deleteComment(id) {
   const res = await fetch(`/api/delete/${id}`, { method: 'POST' });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 function startEdit(id) {
@@ -2159,7 +2169,12 @@ async function saveEdit(id) {
     body: JSON.stringify({ text }),
   });
   state.review = await res.json();
-  await fetchReview();
+  if (isHistoricalView()) {
+    await loadVersions();
+    await renderHistoricalVersion();
+  } else {
+    await fetchReview();
+  }
 }
 
 function cancelEdit(id) {

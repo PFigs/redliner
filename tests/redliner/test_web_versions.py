@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 
-from redliner.review import Comment, Review, Version, save_review
+from redliner.review import Comment, Review, Version, load_review, save_review
 
 from .conftest import http_get, http_post
 
@@ -214,3 +214,31 @@ def test_comment_post_invalid_version_400(running_server, tmp_path):
     status, body = http_post(port, "/api/comment", {"line": 1, "text": "ping", "version": 99})
     assert status == 400
     assert "version" in body.get("error", "").lower()
+
+
+def test_save_edit_content_diffs_vs_head_version(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    # Seed two versions, with v1 deliberately different from disk content.
+    review = Review()
+    review.versions[key] = [
+        Version(file=key, version=0, content="a\nb\n"),
+        Version(file=key, version=1, content="X\nY\n"),
+    ]
+    save_review(plan, review)
+
+    # Save an edit on top of v1.
+    status, _ = http_post(port, "/api/edit-content", {"content": "X\nY\nZ\n"})
+    assert status == 200
+
+    # Reload and verify the diff is computed vs v1, not vs disk.
+    reloaded = load_review(plan)
+    edit = reloaded.get_edit(key)
+    assert edit is not None
+    assert edit.content == "X\nY\nZ\n"
+    # The added line is "Z" relative to v1. Disk has "c\n" — if it diffed against
+    # disk we'd see "-c" in the diff.
+    assert "+Z" in edit.diff
+    assert "-c" not in edit.diff
