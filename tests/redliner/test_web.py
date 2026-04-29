@@ -111,6 +111,14 @@ def test_get_review_includes_null_edit_when_no_edits(server):
     conn.close()
 
 
+def test_get_review_exposes_raw_file_content(server):
+    conn = _conn(server)
+    resp = _get_json(conn, "/api/review")
+    data = json.loads(resp.read())
+    assert data["raw"] == "line 1\nline 2\nline 3\n"
+    conn.close()
+
+
 def test_save_edit_content_persists_and_returns_edit(server):
     conn = _conn(server)
     resp = _post_json(conn, "/api/edit-content", {"content": "edited line 1\nline 2\nline 3\n"})

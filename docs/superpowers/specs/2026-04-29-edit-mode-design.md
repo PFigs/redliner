@@ -81,10 +81,13 @@ The `GET /api/review` payload gains:
   "file_path": "...",
   "storage": "...",
   "lines": [...],
+  "raw": "...",
   "review": {...},
   "edit": {"content": "...", "diff": "...", "saved": "..."}  // or null
 }
 ```
+
+`raw` is the unsplit file content. It exists alongside `lines` because `splitlines()` is lossy on trailing newlines, and the Edit-mode UI needs an exact baseline to detect unsaved changes.
 
 `POST /api/edit-content`:
 1. Read body, validate `content` is a string (empty allowed — represents wiping the plan).
@@ -127,17 +130,18 @@ Where A is the count of `+` lines and R the count of `-` lines in the unified di
 
 **Edit mode.** The file content area is replaced with a single full-height `<textarea>` containing:
 - `state.edit.content` if it exists
-- Otherwise the joined `state.lines` (the original file content)
+- Otherwise `state.raw` (the original file content)
 
 Header actions in Edit mode become:
 
 ```
-[Save] [Revert to original] [Switch to Comment]
+[Save] [Revert to original]
 ```
 
 - **Save** — POSTs current textarea value to `/api/edit-content`. On success, refetches and stays in Edit mode.
 - **Revert to original** — POSTs to `/api/clear-edit` and resets the textarea to the original file content. Confirmation prompt if the textarea has unsaved changes.
-- **Switch to Comment** — flips `mode` back to `"comment"`. If there are unsaved changes (textarea differs from `state.edit.content` or, if no edit, from original), confirm before discarding.
+
+Switching back to Comment mode is done via the segmented `[Comment][Edit]` toggle in the header (no separate "Switch to Comment" button). If there are unsaved changes when switching, confirm before discarding.
 
 **Unload guard.** A `beforeunload` handler warns if the user closes/refreshes the tab while in Edit mode with unsaved changes.
 
