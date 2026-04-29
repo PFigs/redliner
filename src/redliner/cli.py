@@ -147,6 +147,27 @@ def cmd_edits(args: argparse.Namespace) -> None:
     print(edit.diff, end="")
 
 
+def cmd_snapshot(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    if not plan_file.exists():
+        print(f"File not found: {plan_file}", file=sys.stderr)
+        sys.exit(1)
+    review = load_review(plan_file)
+    key = str(plan_file)
+    edit = review.get_edit(key)
+    if edit is not None:
+        content = edit.content
+    else:
+        head = review.head_version(key)
+        try:
+            content = review.version_content(key, head)
+        except ValueError:
+            content = plan_file.read_text()
+    new_version = review.snapshot(key, content)
+    save_review(plan_file, review)
+    print(f"Created v{new_version.version} at {new_version.created}")
+
+
 def cmd_open(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     if not plan_file.exists():
@@ -240,6 +261,11 @@ def main() -> None:
     p = sub.add_parser("edits", help="Print the unified diff of saved edits")
     p.add_argument("file", help="Path to plan file")
     p.set_defaults(func=cmd_edits)
+
+    # snapshot
+    p = sub.add_parser("snapshot", help="Create a new sealed version of a plan")
+    p.add_argument("file", help="Path to plan file")
+    p.set_defaults(func=cmd_snapshot)
 
     # open
     p = sub.add_parser("open", help="Open web review in browser")
