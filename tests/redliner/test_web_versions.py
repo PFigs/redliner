@@ -1,6 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from redliner.review import Comment, Review, Version, save_review
 
-from .conftest import http_get
+from .conftest import http_get, http_post
 
 
 def test_get_versions_returns_baseline(running_server):
@@ -128,3 +130,46 @@ def test_get_version_unknown_returns_404(running_server):
     status = resp.status
     conn.close()
     assert status == 404
+
+
+def test_snapshot_creates_new_version(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    # Save an edit so the snapshot has new content.
+    status, _ = http_post(port, "/api/edit-content", {"content": "a\nB\nc\n"})
+    assert status == 200
+
+    status, body = http_post(port, "/api/snapshot", {"file": key})
+    assert status == 200
+    assert body["version"] == 1
+    assert body["content"] == "a\nB\nc\n"
+
+    listing = http_get(port, f"/api/versions?file={key}")
+    nums = [v["version"] for v in listing["versions"]]
+    assert nums == [0, 1]
+
+
+def test_snapshot_falls_back_to_head_when_no_edit(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    status, body = http_post(port, "/api/snapshot", {"file": key})
+    assert status == 200
+    assert body["version"] == 1
+    assert body["content"] == "a\nb\nc\n"  # head (v0) content
+
+
+def test_snapshot_serializes_concurrent_writes(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = [ex.submit(http_post, port, "/api/snapshot", {"file": key}) for _ in range(4)]
+        results = [f.result() for f in futures]
+
+    versions = sorted(body["version"] for status, body in results)
+    assert versions == [1, 2, 3, 4]

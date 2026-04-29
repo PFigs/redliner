@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -22,6 +23,11 @@ class ReviewServer(HTTPServer):
     active_file: str = ""
     repo_root: Path = Path(".")
     session: Path = Path(".")
+    snapshot_lock: threading.Lock
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.snapshot_lock = threading.Lock()
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -68,6 +74,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._save_edit_content()
         elif self.path == "/api/clear-edit":
             self._clear_edit()
+        elif self.path == "/api/snapshot":
+            self._snapshot()
         else:
             self._not_found()
 
@@ -294,6 +302,32 @@ class ReviewHandler(BaseHTTPRequestHandler):
         review.clear_edit(self._active_key())
         save_review(self.server.session, review)
         self._get_review()
+
+    def _snapshot(self) -> None:
+        if self.server.mode != "plan":
+            self._json_response({"error": "snapshots only available in plan mode"}, 400)
+            return
+        body = self._read_body()
+        file_key = body.get("file") or self._active_key()
+        with self.server.snapshot_lock:
+            review = load_review(self.server.session)
+            edit = review.get_edit(file_key)
+            if edit is not None:
+                content = edit.content
+            else:
+                head = review.head_version(file_key)
+                try:
+                    content = review.version_content(file_key, head)
+                except ValueError:
+                    self._json_response({"error": "no baseline content available"}, 400)
+                    return
+            new_version = review.snapshot(file_key, content)
+            save_review(self.server.session, review)
+        self._json_response({
+            "version": new_version.version,
+            "created": new_version.created,
+            "content": new_version.content,
+        })
 
     def _resolve_all(self) -> None:
         review = load_review(self.server.session)
