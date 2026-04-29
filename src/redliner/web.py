@@ -1565,16 +1565,21 @@ function renderEditMode(container) {
 }
 
 function renderCommentMode(container, lines, review) {
-  // Banner if there are saved edits
+  // When edits exist, show the edited version as the source of truth
+  const displayLines = state.edit ? splitLines(state.edit.content) : lines;
+
+  // Banner explaining what the user is looking at
   if (state.edit) {
     const stats = countDiffLines(state.edit.diff);
     const banner = document.createElement('div');
     banner.className = 'edit-banner';
-    banner.textContent = `Plan edited — +${stats.added} / -${stats.removed} lines in saved version.`;
+    banner.textContent =
+      `Showing your edited version — +${stats.added} / -${stats.removed} from original. ` +
+      `Comments anchor to lines as displayed.`;
     container.appendChild(banner);
   }
 
-  if (lines.length === 0) {
+  if (displayLines.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.textContent = 'No file content';
@@ -1587,7 +1592,7 @@ function renderCommentMode(container, lines, review) {
     (commentsByLine[c.line] ||= []).push(c);
   });
 
-  lines.forEach((text, i) => {
+  displayLines.forEach((text, i) => {
     const lineNum = i + 1;
     const row = document.createElement('div');
     row.className = 'line-row';
@@ -1617,6 +1622,13 @@ function renderCommentMode(container, lines, review) {
       container.appendChild(createCommentForm(lineNum));
     }
   });
+}
+
+function splitLines(s) {
+  if (!s) return [];
+  const out = s.split('\\n');
+  if (out.length && out[out.length - 1] === '') out.pop();
+  return out;
 }
 
 function formatSavedTime(iso) {

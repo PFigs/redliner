@@ -145,7 +145,9 @@ Switching back to Comment mode is done via the segmented `[Comment][Edit]` toggl
 
 **Unload guard.** A `beforeunload` handler warns if the user closes/refreshes the tab while in Edit mode with unsaved changes.
 
-**Comments in Edit mode.** Hidden — they are line-anchored and would no longer line up against edited content. Switching back to Comment mode shows them again against the original lines.
+**Comments in Edit mode.** Hidden — line-anchored comments don't align with a free-form textarea.
+
+**File content in Comment mode when edits exist.** The edited version is the source of truth. Comment mode renders `state.edit.content` line-by-line (not `state.lines`), so reviewers can comment on what they just wrote. Comment line numbers are anchored to the edited line layout. Pre-existing comments may end up pointing at different content if the edit moved lines around — acceptable in v1.
 
 ### Agent workflow
 
