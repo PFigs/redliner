@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from redliner.review import Review, Version, load_review, save_review
 
 
