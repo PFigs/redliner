@@ -20,6 +20,7 @@ class Comment:
     text: str
     status: str = "pending"  # "pending" | "resolved"
     created: str = ""
+    version: int = 0
 
     def __post_init__(self) -> None:
         if not self.created:
