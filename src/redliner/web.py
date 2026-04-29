@@ -41,6 +41,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._get_diff()
         elif self.path.startswith("/api/versions"):
             self._get_versions()
+        elif self.path.startswith("/api/version"):
+            self._get_version()
         else:
             self._not_found()
 
@@ -172,6 +174,41 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 "resolved": resolved,
             })
         self._json_response({"versions": result})
+
+    def _get_version(self) -> None:
+        params = self._parse_query()
+        file_key = params.get("file") or self._active_key()
+        try:
+            n = int(params.get("n", "0"))
+        except ValueError:
+            self._json_response({"error": "n must be an integer"}, 400)
+            return
+        view = params.get("view", "full")
+        if view not in ("diff", "full"):
+            self._json_response({"error": "view must be 'diff' or 'full'"}, 400)
+            return
+        review = load_review(self.server.session)
+        try:
+            content = review.version_content(file_key, n)
+        except ValueError:
+            self._json_response({"error": f"version {n} not found"}, 404)
+            return
+        diff = ""
+        if view == "diff" and n > 0:
+            diff = review.version_diff(file_key, n)
+        comments = [
+            {
+                "id": c.id,
+                "file": c.file,
+                "line": c.line,
+                "text": c.text,
+                "status": c.status,
+                "created": c.created,
+                "version": c.version,
+            }
+            for c in review.comments_for_version(file_key, n)
+        ]
+        self._json_response({"content": content, "diff": diff, "comments": comments})
 
     def _add_comment(self) -> None:
         body = self._read_body()

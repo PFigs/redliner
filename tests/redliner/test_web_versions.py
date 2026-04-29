@@ -45,3 +45,86 @@ def test_get_versions_includes_comment_counts(running_server, tmp_path):
     assert by_v[0]["resolved"] == 0
     assert by_v[1]["pending"] == 1
     assert by_v[1]["resolved"] == 1
+
+
+def test_get_version_full_returns_content(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    review = Review()
+    review.versions[key] = [
+        Version(file=key, version=0, content="a\nb\n"),
+        Version(file=key, version=1, content="a\nB\n"),
+    ]
+    save_review(plan, review)
+
+    data = http_get(port, f"/api/version?file={key}&n=1&view=full")
+
+    assert data["content"] == "a\nB\n"
+    assert data["diff"] == ""
+    assert data["comments"] == []
+
+
+def test_get_version_diff_returns_unified_diff(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    review = Review()
+    review.versions[key] = [
+        Version(file=key, version=0, content="a\nb\n"),
+        Version(file=key, version=1, content="a\nB\n"),
+    ]
+    save_review(plan, review)
+
+    data = http_get(port, f"/api/version?file={key}&n=1&view=diff")
+
+    assert "-b" in data["diff"]
+    assert "+B" in data["diff"]
+    assert data["content"] == "a\nB\n"
+
+
+def test_get_version_diff_for_v0_returns_full(running_server):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    data = http_get(port, f"/api/version?file={key}&n=0&view=diff")
+
+    assert data["diff"] == ""
+    assert data["content"] == "a\nb\nc\n"
+
+
+def test_get_version_returns_pinned_comments(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    review = Review()
+    review.versions[key] = [
+        Version(file=key, version=0, content="a\nb\n"),
+        Version(file=key, version=1, content="a\nB\n"),
+    ]
+    review.comments.append(Comment(id=10, file=key, line=2, text="on v1", version=1))
+    review.comments.append(Comment(id=11, file=key, line=1, text="on v0", version=0))
+    save_review(plan, review)
+
+    data = http_get(port, f"/api/version?file={key}&n=1&view=full")
+
+    ids = {c["id"] for c in data["comments"]}
+    assert ids == {10}
+
+
+def test_get_version_unknown_returns_404(running_server):
+    from http.client import HTTPConnection
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    conn = HTTPConnection("127.0.0.1", port)
+    conn.request("GET", f"/api/version?file={key}&n=99&view=full")
+    resp = conn.getresponse()
+    status = resp.status
+    conn.close()
+    assert status == 404
