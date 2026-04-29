@@ -1181,6 +1181,28 @@ header.approved {
   flex-shrink: 0;
 }
 
+.mode-toggle {
+  display: flex;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.mode-toggle button {
+  padding: 5px 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #8b949e;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mode-toggle button.active {
+  background: #21262d;
+  color: #e6edf3;
+}
+.mode-toggle button:hover:not(.active) { background: #161b22; color: #e6edf3; }
+
 button {
   padding: 5px 16px;
   border-radius: 6px;
@@ -1350,6 +1372,18 @@ main {
   font-size: 13px; resize: vertical; outline: none;
 }
 .edit-textarea:focus { box-shadow: 0 0 0 2px #58a6ff33; }
+
+.edit-banner {
+  margin: 0 0 12px 0;
+  padding: 10px 14px;
+  background: #1c2c4a;
+  border: 1px solid #2f5fb2;
+  border-radius: 6px;
+  color: #c9d8f3;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
@@ -1367,6 +1401,24 @@ main {
   padding: 48px 24px;
   color: #8b949e;
 }
+
+.edit-area {
+  width: 100%;
+  min-height: calc(100vh - 220px);
+  background: #0d1117;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  tab-size: 4;
+  white-space: pre;
+}
+.edit-area:focus { border-color: #58a6ff; box-shadow: 0 0 0 2px #58a6ff33; }
 </style>
 </head>
 <body>
@@ -1374,6 +1426,10 @@ main {
 <header id="header">
   <div class="title" id="filename"></div>
   <div class="stats" id="stats"></div>
+  <div class="mode-toggle" id="mode-toggle">
+    <button id="mode-comment" onclick="setMode('comment')">Comment</button>
+    <button id="mode-edit" onclick="setMode('edit')">Edit</button>
+  </div>
   <div class="actions" id="header-actions"></div>
 </header>
 
@@ -1390,6 +1446,8 @@ main {
 <script>
 let state = null;
 let activeFormLine = null;
+let mode = 'comment';            // 'comment' | 'edit'
+let editBuffer = null;           // textarea contents while in Edit mode
 
 async function fetchReview() {
   const res = await fetch('/api/review');
@@ -1403,34 +1461,64 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function setMode(next) {
+  if (mode === next) return;
+  if (mode === 'edit' && hasUnsavedEdits()) {
+    if (!confirm('Discard unsaved edits?')) return;
+  }
+  mode = next;
+  editBuffer = null;
+  render();
+}
+
+function hasUnsavedEdits() {
+  if (mode !== 'edit') return false;
+  const ta = document.getElementById('edit-area');
+  if (!ta) return false;
+  const baseline = state.edit ? state.edit.content : (state.lines.join('\n') + (state.lines.length ? '\n' : ''));
+  return ta.value !== baseline;
+}
+
 function render() {
   if (!state) return;
   const { filename, lines, review } = state;
 
-  // Header
+  document.title = filename;
+  document.getElementById('filename').textContent = filename;
+  document.getElementById('storage-path').textContent = state.storage || '';
+
   const hdr = document.getElementById('header');
   hdr.className = review.status === 'approved' ? 'approved' : '';
 
-  document.title = filename;
-  document.getElementById('filename').textContent = filename;
-
-  // Storage
-  document.getElementById('storage-path').textContent = state.storage || '';
+  // Mode toggle button states (hide entirely once approved)
+  const toggle = document.getElementById('mode-toggle');
+  toggle.style.display = review.status === 'approved' ? 'none' : 'flex';
+  document.getElementById('mode-comment').classList.toggle('active', mode === 'comment');
+  document.getElementById('mode-edit').classList.toggle('active', mode === 'edit');
 
   // Stats
   const statsEl = document.getElementById('stats');
   if (review.status === 'approved') {
     statsEl.innerHTML = '<span class="badge approved-badge">Approved</span>';
+  } else if (mode === 'edit') {
+    statsEl.innerHTML = state.edit
+      ? `<span class="badge resolved-badge">Edited</span>`
+      : `<span class="badge pending-badge">Editing</span>`;
   } else {
     statsEl.innerHTML =
       `<span class="badge pending-badge">${review.pending} pending</span>` +
       `<span class="badge resolved-badge">${review.resolved} resolved</span>`;
   }
 
-  // Actions
+  // Header actions depend on mode
   const actionsEl = document.getElementById('header-actions');
   if (review.status === 'approved') {
     actionsEl.innerHTML = '<button class="btn-danger" onclick="quit()">Close</button>';
+  } else if (mode === 'edit') {
+    const revertDisabled = state.edit ? '' : 'disabled';
+    actionsEl.innerHTML =
+      `<button class="btn-submit" onclick="saveEditContent()">Save</button>` +
+      `<button onclick="revertEdit()" ${revertDisabled}>Revert to original</button>`;
   } else {
     const hasPending = review.pending > 0;
     actionsEl.innerHTML =
@@ -1438,16 +1526,48 @@ function render() {
       `<button class="btn-approve" onclick="approveReview()" ${hasPending ? 'disabled' : ''}>Approve</button>`;
   }
 
-  // File content
   const container = document.getElementById('file-content');
   container.innerHTML = '';
 
-  if (lines.length === 0) {
-    container.innerHTML = '<div class="empty-state">No file content</div>';
+  if (mode === 'edit') {
+    renderEditMode(container);
     return;
   }
 
-  // Index comments by line
+  renderCommentMode(container, lines, review);
+}
+
+function renderEditMode(container) {
+  const baseline = state.edit ? state.edit.content : (state.lines.join('\n') + (state.lines.length ? '\n' : ''));
+  const value = editBuffer !== null ? editBuffer : baseline;
+  const ta = document.createElement('textarea');
+  ta.id = 'edit-area';
+  ta.className = 'edit-area';
+  ta.value = value;
+  ta.addEventListener('input', () => { editBuffer = ta.value; });
+  container.appendChild(ta);
+  // Focus on first render of edit mode
+  setTimeout(() => ta.focus(), 0);
+}
+
+function renderCommentMode(container, lines, review) {
+  // Banner if there are saved edits
+  if (state.edit) {
+    const stats = countDiffLines(state.edit.diff);
+    const banner = document.createElement('div');
+    banner.className = 'edit-banner';
+    banner.textContent = `Plan edited — +${stats.added} / -${stats.removed} lines in saved version.`;
+    container.appendChild(banner);
+  }
+
+  if (lines.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No file content';
+    container.appendChild(empty);
+    return;
+  }
+
   const commentsByLine = {};
   review.comments.forEach(c => {
     (commentsByLine[c.line] ||= []).push(c);
@@ -1455,8 +1575,6 @@ function render() {
 
   lines.forEach((text, i) => {
     const lineNum = i + 1;
-
-    // Line row
     const row = document.createElement('div');
     row.className = 'line-row';
     row.innerHTML =
@@ -1467,7 +1585,6 @@ function render() {
     }
     container.appendChild(row);
 
-    // Comments on this line
     (commentsByLine[lineNum] || []).forEach(c => {
       const block = document.createElement('div');
       block.className = `comment-block ${c.status}`;
@@ -1482,11 +1599,20 @@ function render() {
       container.appendChild(block);
     });
 
-    // Show comment form if active on this line
     if (activeFormLine === lineNum && review.status !== 'approved') {
       container.appendChild(createCommentForm(lineNum));
     }
   });
+}
+
+function countDiffLines(diff) {
+  let added = 0, removed = 0;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
+    if (line.startsWith('+')) added++;
+    else if (line.startsWith('-')) removed++;
+  }
+  return { added, removed };
 }
 
 function showCommentForm(lineNum) {
@@ -1583,6 +1709,28 @@ function cancelEdit(id) {
   render();
 }
 
+async function saveEditContent() {
+  const ta = document.getElementById('edit-area');
+  if (!ta) return;
+  const content = ta.value;
+  const res = await fetch('/api/edit-content', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (res.ok) {
+    editBuffer = null;
+    await fetchReview();
+  }
+}
+
+async function revertEdit() {
+  if (!confirm('Discard saved edits and revert to the original file?')) return;
+  await fetch('/api/clear-edit', { method: 'POST' });
+  editBuffer = null;
+  await fetchReview();
+}
+
 async function resolveAll() {
   const res = await fetch('/api/resolve-all', { method: 'POST' });
   state.review = await res.json();
@@ -1618,6 +1766,13 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && activeFormLine !== null) {
     e.preventDefault();
     cancelForm();
+  }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (hasUnsavedEdits()) {
+    e.preventDefault();
+    e.returnValue = '';
   }
 });
 
