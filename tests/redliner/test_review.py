@@ -122,6 +122,15 @@ def test_set_edit_stores_content_and_computes_diff():
     assert review.edits[FILE] is edit
 
 
+def test_set_edit_diff_has_well_formed_headers():
+    review = Review()
+    edit = review.set_edit(file=FILE, content="a\nB\nc\n", original="a\nb\nc\n")
+    lines = edit.diff.splitlines()
+    assert lines[0] == f"--- {FILE}"
+    assert lines[1] == f"+++ {FILE}"
+    assert lines[2].startswith("@@")
+
+
 def test_set_edit_overwrites_previous_edit_for_same_file():
     review = Review()
     review.set_edit(file=FILE, content="v1\n", original="orig\n")

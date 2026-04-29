@@ -106,7 +106,6 @@ class Review:
                 content.splitlines(keepends=True),
                 fromfile=file,
                 tofile=file,
-                lineterm="",
             )
         )
         edit = Edit(file=file, content=content, diff=diff)
