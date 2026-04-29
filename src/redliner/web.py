@@ -108,6 +108,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _active_key(self) -> str:
         return str(self._active_plan_file().resolve())
 
+    def _resolve_file_param(self, file_param: str | None) -> str:
+        if file_param:
+            return str(Path(file_param).resolve())
+        return self._active_key()
+
     def _parse_query(self) -> dict[str, str]:
         qs = parse_qs(urlparse(self.path).query)
         return {k: v[0] for k, v in qs.items() if v}
@@ -168,7 +173,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _get_versions(self) -> None:
         params = self._parse_query()
-        file_key = params.get("file") or self._active_key()
+        file_key = self._resolve_file_param(params.get("file"))
         review = load_review(self.server.session)
         vlist = review.versions.get(file_key, [])
         result = []
@@ -186,7 +191,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def _get_version(self) -> None:
         params = self._parse_query()
-        file_key = params.get("file") or self._active_key()
+        file_key = self._resolve_file_param(params.get("file"))
         try:
             n = int(params.get("n", "0"))
         except ValueError:
@@ -317,7 +322,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._json_response({"error": "snapshots only available in plan mode"}, 400)
             return
         body = self._read_body()
-        file_key = body.get("file") or self._active_key()
+        file_key = self._resolve_file_param(body.get("file"))
         with self.server.snapshot_lock:
             review = load_review(self.server.session)
             edit = review.get_edit(file_key)
