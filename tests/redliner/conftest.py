@@ -1,11 +1,17 @@
 import json
 import subprocess
 from http.client import HTTPConnection
+from socketserver import ThreadingMixIn
 from threading import Thread
 
 import pytest
 
 from redliner.web import ReviewHandler, ReviewServer
+
+
+class _ThreadedReviewServer(ThreadingMixIn, ReviewServer):
+    """ReviewServer with threading enabled, for concurrency tests."""
+    pass
 
 
 def _git(tmp_path, *args):
@@ -36,6 +42,28 @@ def running_server(tmp_path, monkeypatch):
     plan.write_text("a\nb\nc\n")
 
     server = ReviewServer(("127.0.0.1", 0), ReviewHandler)
+    server.plan_file = plan
+    server.session = plan
+    server.mode = "plan"
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    port = server.server_address[1]
+    yield {"port": port, "plan": plan}
+
+    server.shutdown()
+    thread.join(timeout=2)
+    server.server_close()
+
+
+@pytest.fixture
+def running_threaded_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+    plan = tmp_path / "plan.md"
+    plan.write_text("a\nb\nc\n")
+
+    server = _ThreadedReviewServer(("127.0.0.1", 0), ReviewHandler)
     server.plan_file = plan
     server.session = plan
     server.mode = "plan"

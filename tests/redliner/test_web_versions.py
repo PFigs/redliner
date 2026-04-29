@@ -162,9 +162,9 @@ def test_snapshot_falls_back_to_head_when_no_edit(running_server, tmp_path):
     assert body["content"] == "a\nb\nc\n"  # head (v0) content
 
 
-def test_snapshot_serializes_concurrent_writes(running_server, tmp_path):
-    port = running_server["port"]
-    plan = running_server["plan"]
+def test_snapshot_serializes_concurrent_writes(running_threaded_server, tmp_path):
+    port = running_threaded_server["port"]
+    plan = running_threaded_server["plan"]
     key = str(plan.resolve())
 
     with ThreadPoolExecutor(max_workers=4) as ex:
