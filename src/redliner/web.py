@@ -214,7 +214,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
         plan_file = self._active_plan_file()
         key = self._active_key()
         review = load_review(self.server.session)
-        original = plan_file.read_text() if plan_file.exists() else ""
+        head = review.head_version(key)
+        try:
+            original = review.version_content(key, head)
+        except ValueError:
+            original = plan_file.read_text() if plan_file.exists() else ""
         review.set_edit(file=key, content=content, original=original)
         save_review(self.server.session, review)
         self._get_review()

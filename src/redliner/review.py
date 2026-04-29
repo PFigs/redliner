@@ -87,8 +87,9 @@ class Review:
     def resolved_for(self, file: str) -> list[Comment]:
         return [c for c in self.comments_for(file) if c.status == "resolved"]
 
-    def add_comment(self, file: str, line: int, text: str) -> Comment:
-        comment = Comment(id=self.next_id(), file=file, line=line, text=text)
+    def add_comment(self, file: str, line: int, text: str, version: int | None = None) -> Comment:
+        v = self.head_version(file) if version is None else version
+        comment = Comment(id=self.next_id(), file=file, line=line, text=text, version=v)
         self.comments.append(comment)
         self._ensure_file(file).status = "in_review"
         return comment

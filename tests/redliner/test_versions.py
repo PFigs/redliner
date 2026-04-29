@@ -192,3 +192,29 @@ def test_comments_for_version_filters_by_file_and_version():
     result = review.comments_for_version("/x", 1)
     ids = {c.id for c in result}
     assert ids == {2}
+
+
+def test_add_comment_defaults_version_to_head():
+    review = Review()
+    review.versions["/x"] = [
+        Version(file="/x", version=0, content="a\n"),
+        Version(file="/x", version=1, content="b\n"),
+    ]
+    c = review.add_comment("/x", 1, "ping")
+    assert c.version == 1
+
+
+def test_add_comment_explicit_version_overrides_head():
+    review = Review()
+    review.versions["/x"] = [
+        Version(file="/x", version=0, content="a\n"),
+        Version(file="/x", version=1, content="b\n"),
+    ]
+    c = review.add_comment("/x", 1, "ping", version=0)
+    assert c.version == 0
+
+
+def test_add_comment_no_versions_yields_zero():
+    review = Review()
+    c = review.add_comment("/x", 1, "ping")
+    assert c.version == 0
