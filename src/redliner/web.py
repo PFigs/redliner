@@ -8,6 +8,7 @@ import sys
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from redliner.diff import FileDiff
 from redliner.review import load_review, save_review, session_dir
@@ -38,6 +39,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._get_review()
         elif self.path == "/api/diff" and self.server.mode == "diff":
             self._get_diff()
+        elif self.path.startswith("/api/versions"):
+            self._get_versions()
         else:
             self._not_found()
 
@@ -94,6 +97,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _active_key(self) -> str:
         return str(self._active_plan_file().resolve())
 
+    def _parse_query(self) -> dict[str, str]:
+        qs = parse_qs(urlparse(self.path).query)
+        return {k: v[0] for k, v in qs.items() if v}
+
     def _file_review_dict(self, file_key: str) -> dict:
         review = load_review(self.server.session)
         pending = review.pending_for(file_key)
@@ -147,6 +154,24 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 else None
             ),
         })
+
+    def _get_versions(self) -> None:
+        params = self._parse_query()
+        file_key = params.get("file") or self._active_key()
+        review = load_review(self.server.session)
+        vlist = review.versions.get(file_key, [])
+        result = []
+        for v in vlist:
+            comments = review.comments_for_version(file_key, v.version)
+            pending = sum(1 for c in comments if c.status == "pending")
+            resolved = sum(1 for c in comments if c.status == "resolved")
+            result.append({
+                "version": v.version,
+                "created": v.created,
+                "pending": pending,
+                "resolved": resolved,
+            })
+        self._json_response({"versions": result})
 
     def _add_comment(self) -> None:
         body = self._read_body()
