@@ -1845,7 +1845,7 @@ async function takeSnapshot() {
     alert('Snapshot failed: ' + text);
     return;
   }
-  await loadVersions();
+  await fetchReview();
 }
 
 function setView(view) {
@@ -1940,9 +1940,16 @@ function render() {
       ? `<span class="badge resolved-badge">Edited</span>`
       : `<span class="badge pending-badge">Editing</span>`;
   } else {
+    // Current view: show head-version's counts so the pill stays in sync with the dropdown.
+    const head = availableVersions.length
+      ? Math.max(...availableVersions.map(v => v.version))
+      : 0;
+    const headEntry = availableVersions.find(v => v.version === head);
+    const pending = headEntry ? headEntry.pending : review.pending;
+    const resolved = headEntry ? headEntry.resolved : review.resolved;
     statsEl.innerHTML =
-      `<span class="badge pending-badge">${review.pending} pending</span>` +
-      `<span class="badge resolved-badge">${review.resolved} resolved</span>`;
+      `<span class="badge pending-badge">${pending} pending</span>` +
+      `<span class="badge resolved-badge">${resolved} resolved</span>`;
   }
 
   // Header actions depend on mode
