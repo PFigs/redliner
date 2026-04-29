@@ -168,6 +168,21 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     print(f"Created v{new_version.version} at {new_version.created}")
 
 
+def cmd_versions(args: argparse.Namespace) -> None:
+    plan_file = Path(args.file).resolve()
+    review = load_review(plan_file)
+    key = str(plan_file)
+    vlist = review.versions.get(key, [])
+    if not vlist:
+        print("No versions.")
+        return
+    for v in vlist:
+        comments = review.comments_for_version(key, v.version)
+        pending = sum(1 for c in comments if c.status == "pending")
+        resolved = sum(1 for c in comments if c.status == "resolved")
+        print(f"v{v.version}  {v.created}  {pending} pending  {resolved} resolved")
+
+
 def cmd_open(args: argparse.Namespace) -> None:
     plan_file = Path(args.file).resolve()
     if not plan_file.exists():
@@ -266,6 +281,11 @@ def main() -> None:
     p = sub.add_parser("snapshot", help="Create a new sealed version of a plan")
     p.add_argument("file", help="Path to plan file")
     p.set_defaults(func=cmd_snapshot)
+
+    # versions
+    p = sub.add_parser("versions", help="List versions of a plan")
+    p.add_argument("file", help="Path to plan file")
+    p.set_defaults(func=cmd_versions)
 
     # open
     p = sub.add_parser("open", help="Open web review in browser")
