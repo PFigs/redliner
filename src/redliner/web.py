@@ -1715,6 +1715,7 @@ async function selectVersion(n) {
     document.getElementById('snapshot-btn').classList.add('hidden');
     await renderHistoricalVersion();
   }
+  applyHistoricalDisable();
 }
 
 async function renderHistoricalVersion() {
@@ -1846,6 +1847,15 @@ function setView(view) {
   }
 }
 
+function isHistoricalView() {
+  return selectedVersion !== null;
+}
+
+function applyHistoricalDisable() {
+  const editBtn = document.getElementById('mode-edit');
+  if (editBtn) editBtn.disabled = isHistoricalView();
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
@@ -1874,6 +1884,7 @@ function renderCommentBlock(c) {
 }
 
 function setMode(next) {
+  if (isHistoricalView()) return;
   if (mode === next) return;
   if (mode === 'edit' && hasUnsavedEdits()) {
     if (!confirm('Discard unsaved edits?')) return;
@@ -1945,10 +1956,12 @@ function render() {
 
   if (mode === 'edit') {
     renderEditMode(container);
+    applyHistoricalDisable();
     return;
   }
 
   renderCommentMode(container, lines, review);
+  applyHistoricalDisable();
 }
 
 function renderEditMode(container) {
@@ -2050,6 +2063,7 @@ function countDiffLines(diff) {
 
 function showCommentForm(lineNum) {
   if (state.review.status === 'approved') return;
+  if (isHistoricalView()) return;
   activeFormLine = activeFormLine === lineNum ? null : lineNum;
   render();
   if (activeFormLine !== null) {
