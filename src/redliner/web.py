@@ -1833,9 +1833,19 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Stub for Task 15 — defined here so the onclick="takeSnapshot()" doesn't error in this task.
 async function takeSnapshot() {
-  console.log('snapshot button clicked (wired in Task 15)');
+  const filePath = state && state.file_path ? state.file_path : '';
+  const resp = await fetch('/api/snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: filePath }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    alert('Snapshot failed: ' + text);
+    return;
+  }
+  await loadVersions();
 }
 
 function setView(view) {
