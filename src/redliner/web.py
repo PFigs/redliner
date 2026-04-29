@@ -1147,6 +1147,15 @@ header.approved {
   flex-shrink: 0;
 }
 
+.saved-indicator {
+  font-size: 12px;
+  color: #8b949e;
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  transition: color 0.4s ease;
+}
+.saved-indicator.flash { color: #3fb950; }
+
 .stats {
   display: flex;
   gap: 8px;
@@ -1427,6 +1436,7 @@ main {
 
 <header id="header">
   <div class="title" id="filename"></div>
+  <span class="saved-indicator" id="saved-indicator"></span>
   <div class="stats" id="stats"></div>
   <div class="mode-toggle" id="mode-toggle">
     <button id="mode-comment" onclick="setMode('comment')">Comment</button>
@@ -1488,6 +1498,8 @@ function render() {
   document.title = filename;
   document.getElementById('filename').textContent = filename;
   document.getElementById('storage-path').textContent = state.storage || '';
+  document.getElementById('saved-indicator').textContent =
+    state.edit ? `Saved ${formatSavedTime(state.edit.saved)}` : '';
 
   const hdr = document.getElementById('header');
   hdr.className = review.status === 'approved' ? 'approved' : '';
@@ -1605,6 +1617,22 @@ function renderCommentMode(container, lines, review) {
       container.appendChild(createCommentForm(lineNum));
     }
   });
+}
+
+function formatSavedTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function flashSavedIndicator() {
+  const el = document.getElementById('saved-indicator');
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1200);
 }
 
 function countDiffLines(diff) {
@@ -1727,6 +1755,7 @@ async function saveEditContent() {
   }
   editBuffer = null;
   await fetchReview();
+  flashSavedIndicator();
 }
 
 async function revertEdit() {
