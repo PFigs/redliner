@@ -228,7 +228,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         key = self._active_key()
         review = load_review(self.server.session)
-        review.add_comment(key, line, text)
+        version = body.get("version")
+        if version is not None:
+            if not isinstance(version, int):
+                self._json_response({"error": "version must be an integer"}, 400)
+                return
+            valid = {v.version for v in review.versions.get(key, [])}
+            if version not in valid:
+                self._json_response({"error": f"version {version} not found"}, 400)
+                return
+        review.add_comment(key, line, text, version=version)
         save_review(self.server.session, review)
         if self.server.mode == "diff":
             self._get_diff()

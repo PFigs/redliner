@@ -173,3 +173,44 @@ def test_snapshot_serializes_concurrent_writes(running_server, tmp_path):
 
     versions = sorted(body["version"] for status, body in results)
     assert versions == [1, 2, 3, 4]
+
+
+def test_comment_post_uses_head_version_by_default(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    # Take a snapshot so head is v1.
+    http_post(port, "/api/snapshot", {"file": key})
+
+    status, _ = http_post(port, "/api/comment", {"line": 1, "text": "ping"})
+    assert status == 200
+
+    listing = http_get(port, f"/api/versions?file={key}")
+    by_v = {v["version"]: v for v in listing["versions"]}
+    assert by_v[1]["pending"] == 1
+    assert by_v[0]["pending"] == 0
+
+
+def test_comment_post_explicit_version_pins_to_it(running_server, tmp_path):
+    port = running_server["port"]
+    plan = running_server["plan"]
+    key = str(plan.resolve())
+
+    http_post(port, "/api/snapshot", {"file": key})  # v1 exists
+
+    status, _ = http_post(port, "/api/comment", {"line": 1, "text": "back to v0", "version": 0})
+    assert status == 200
+
+    listing = http_get(port, f"/api/versions?file={key}")
+    by_v = {v["version"]: v for v in listing["versions"]}
+    assert by_v[0]["pending"] == 1
+    assert by_v[1]["pending"] == 0
+
+
+def test_comment_post_invalid_version_400(running_server, tmp_path):
+    port = running_server["port"]
+
+    status, body = http_post(port, "/api/comment", {"line": 1, "text": "ping", "version": 99})
+    assert status == 400
+    assert "version" in body.get("error", "").lower()
