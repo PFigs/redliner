@@ -1711,7 +1711,11 @@ async function selectVersion(n) {
     document.getElementById('snapshot-btn').classList.remove('hidden');
     await fetchReview();
   } else {
-    document.getElementById('view-toggle').classList.remove('hidden');
+    if (n === 0) {
+      document.getElementById('view-toggle').classList.add('hidden');
+    } else {
+      document.getElementById('view-toggle').classList.remove('hidden');
+    }
     document.getElementById('snapshot-btn').classList.add('hidden');
     await renderHistoricalVersion();
   }
