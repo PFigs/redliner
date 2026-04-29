@@ -130,7 +130,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def _get_review(self) -> None:
         plan_file = self._active_plan_file()
         key = self._active_key()
-        lines = plan_file.read_text().splitlines() if plan_file.exists() else []
+        raw = plan_file.read_text() if plan_file.exists() else ""
+        lines = raw.splitlines()
         review = load_review(self.server.session)
         edit = review.get_edit(key)
         self._json_response({
@@ -138,6 +139,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             "file_path": key,
             "storage": str(session_dir(self.server.session)),
             "lines": lines,
+            "raw": raw,
             "review": self._file_review_dict(key),
             "edit": (
                 {"content": edit.content, "diff": edit.diff, "saved": edit.saved}
@@ -1475,7 +1477,7 @@ function hasUnsavedEdits() {
   if (mode !== 'edit') return false;
   const ta = document.getElementById('edit-area');
   if (!ta) return false;
-  const baseline = state.edit ? state.edit.content : (state.lines.join('\n') + (state.lines.length ? '\n' : ''));
+  const baseline = state.edit ? state.edit.content : (state.raw || '');
   return ta.value !== baseline;
 }
 
@@ -1538,7 +1540,7 @@ function render() {
 }
 
 function renderEditMode(container) {
-  const baseline = state.edit ? state.edit.content : (state.lines.join('\n') + (state.lines.length ? '\n' : ''));
+  const baseline = state.edit ? state.edit.content : (state.raw || '');
   const value = editBuffer !== null ? editBuffer : baseline;
   const ta = document.createElement('textarea');
   ta.id = 'edit-area';
@@ -1606,6 +1608,7 @@ function renderCommentMode(container, lines, review) {
 }
 
 function countDiffLines(diff) {
+  if (!diff) return { added: 0, removed: 0 };
   let added = 0, removed = 0;
   for (const line of diff.split('\n')) {
     if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
@@ -1718,15 +1721,21 @@ async function saveEditContent() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
   });
-  if (res.ok) {
-    editBuffer = null;
-    await fetchReview();
+  if (!res.ok) {
+    alert(`Save failed: ${res.status} ${await res.text()}`);
+    return;
   }
+  editBuffer = null;
+  await fetchReview();
 }
 
 async function revertEdit() {
   if (!confirm('Discard saved edits and revert to the original file?')) return;
-  await fetch('/api/clear-edit', { method: 'POST' });
+  const res = await fetch('/api/clear-edit', { method: 'POST' });
+  if (!res.ok) {
+    alert(`Revert failed: ${res.status} ${await res.text()}`);
+    return;
+  }
   editBuffer = null;
   await fetchReview();
 }
