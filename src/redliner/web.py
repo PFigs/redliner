@@ -40,6 +40,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/diff" and self.server.mode == "diff":
             self._get_diff()
         elif self.path.startswith("/api/versions"):
+            # Plural must precede singular: both startswith match.
             self._get_versions()
         elif self.path.startswith("/api/version"):
             self._get_version()
