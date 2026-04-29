@@ -1324,6 +1324,40 @@ header.approved {
 }
 .mode-toggle button:hover:not(.active) { background: #161b22; color: #e6edf3; }
 
+.version-picker { display: flex; align-items: center; gap: 8px; position: relative; }
+.version-btn {
+  background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  padding: 4px 10px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.version-btn:hover { background: #30363d; }
+.version-menu {
+  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  min-width: 320px; max-height: 400px; overflow: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 10;
+}
+.version-menu.hidden { display: none; }
+.version-menu .item {
+  padding: 8px 12px; cursor: pointer; display: flex; gap: 12px; align-items: center;
+  border-bottom: 1px solid #21262d;
+}
+.version-menu .item:hover { background: #21262d; }
+.version-menu .item .num { font-weight: 600; min-width: 90px; }
+.version-menu .item .ts { color: #8b949e; font-size: 0.85em; flex: 1; }
+.version-menu .item .counts { color: #8b949e; font-size: 0.85em; }
+.version-action {
+  background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+  padding: 4px 10px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.version-action.hidden { display: none; }
+.view-toggle { display: inline-flex; border: 1px solid #30363d; border-radius: 4px; overflow: hidden; }
+.view-toggle.hidden { display: none; }
+.view-toggle button {
+  background: #161b22; color: #e6edf3; border: 0; padding: 4px 10px;
+  font: inherit; cursor: pointer;
+}
+.view-toggle button.active { background: #30363d; }
+
 button {
   padding: 5px 16px;
   border-radius: 6px;
@@ -1547,6 +1581,15 @@ main {
 <header id="header">
   <div class="title" id="filename"></div>
   <span class="saved-indicator" id="saved-indicator"></span>
+  <div class="version-picker">
+    <button id="version-btn" class="version-btn" onclick="toggleVersionMenu()">current ▾</button>
+    <div id="version-menu" class="version-menu hidden"></div>
+    <button id="snapshot-btn" class="version-action" onclick="takeSnapshot()">Snapshot</button>
+    <span class="view-toggle hidden" id="view-toggle">
+      <button id="toggle-diff" class="active" onclick="setView('diff')">Diff</button>
+      <button id="toggle-full" onclick="setView('full')">Full</button>
+    </span>
+  </div>
   <div class="stats" id="stats"></div>
   <div class="mode-toggle" id="mode-toggle">
     <button id="mode-comment" onclick="setMode('comment')">Comment</button>
@@ -1570,11 +1613,104 @@ let state = null;
 let activeFormLine = null;
 let mode = 'comment';            // 'comment' | 'edit'
 let editBuffer = null;           // textarea contents while in Edit mode
+let selectedVersion = null;     // null = "current"; integer = past version
+let availableVersions = [];
+let currentView = 'diff';
 
 async function fetchReview() {
   const res = await fetch('/api/review');
   state = await res.json();
   render();
+  await loadVersions();
+}
+
+async function loadVersions() {
+  if (!state || !state.file_path) return;
+  const url = '/api/versions?file=' + encodeURIComponent(state.file_path);
+  const resp = await fetch(url);
+  const data = await resp.json();
+  availableVersions = data.versions || [];
+  renderVersionMenu();
+  updateVersionButton();
+}
+
+function renderVersionMenu() {
+  const menu = document.getElementById('version-menu');
+  if (!menu) return;
+  const head = availableVersions.length ? Math.max(...availableVersions.map(v => v.version)) : 0;
+  const headEntry = availableVersions.find(v => v.version === head) || { pending: 0, resolved: 0 };
+  const items = [];
+  items.push(itemHTML({
+    kind: 'current',
+    label: 'current',
+    ts: '',
+    pending: headEntry.pending,
+    resolved: headEntry.resolved,
+  }));
+  // Versions newest-first.
+  const sorted = [...availableVersions].sort((a, b) => b.version - a.version);
+  for (const v of sorted) {
+    const label = v.version === 0 ? 'v0 baseline' : 'v' + v.version;
+    items.push(itemHTML({
+      kind: 'past',
+      version: v.version,
+      label,
+      ts: v.created,
+      pending: v.pending,
+      resolved: v.resolved,
+    }));
+  }
+  menu.innerHTML = items.join('');
+}
+
+function itemHTML(o) {
+  const onclick = o.kind === 'current'
+    ? "selectVersion(null)"
+    : "selectVersion(" + o.version + ")";
+  const ts = o.ts ? new Date(o.ts).toLocaleString() : '';
+  return '<div class="item" onclick="' + onclick + '">' +
+    '<span class="num">' + o.label + '</span>' +
+    '<span class="ts">' + ts + '</span>' +
+    '<span class="counts">' + o.pending + ' pending, ' + o.resolved + ' resolved</span>' +
+    '</div>';
+}
+
+function updateVersionButton() {
+  const btn = document.getElementById('version-btn');
+  if (!btn) return;
+  btn.textContent = (selectedVersion === null ? 'current' : 'v' + selectedVersion) + ' ▾';
+}
+
+function toggleVersionMenu() {
+  const menu = document.getElementById('version-menu');
+  if (menu) menu.classList.toggle('hidden');
+}
+
+function selectVersion(n) {
+  selectedVersion = n;
+  document.getElementById('version-menu').classList.add('hidden');
+  updateVersionButton();
+  // Task 13 will wire this to actually re-render the document.
+}
+
+document.addEventListener('click', (e) => {
+  const picker = document.querySelector('.version-picker');
+  if (picker && !picker.contains(e.target)) {
+    const menu = document.getElementById('version-menu');
+    if (menu) menu.classList.add('hidden');
+  }
+});
+
+// Stub for Task 15 — defined here so the onclick="takeSnapshot()" doesn't error in this task.
+async function takeSnapshot() {
+  console.log('snapshot button clicked (wired in Task 15)');
+}
+
+function setView(view) {
+  currentView = view;
+  document.getElementById('toggle-diff').classList.toggle('active', view === 'diff');
+  document.getElementById('toggle-full').classList.toggle('active', view === 'full');
+  // Task 13 will re-render based on the toggle.
 }
 
 function escapeHtml(s) {
