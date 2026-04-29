@@ -1358,6 +1358,22 @@ header.approved {
 }
 .view-toggle button.active { background: #30363d; }
 
+.line-row.historical { cursor: default; }
+.diff-notice {
+  background: #21262d; padding: 6px 10px; margin-bottom: 12px;
+  border-left: 3px solid #d29922; color: #d29922;
+}
+.diff-text {
+  white-space: pre; background: #0d1117; padding: 12px; border-radius: 4px;
+  overflow: auto; margin: 0;
+}
+.diff-comments { margin-top: 12px; }
+.diff-comment-anchor { margin-top: 8px; }
+.diff-comment-line {
+  display: inline-block; color: #8b949e; font-size: 0.85em;
+  margin-right: 8px;
+}
+
 button {
   padding: 5px 16px;
   border-radius: 6px;
@@ -1686,11 +1702,126 @@ function toggleVersionMenu() {
   if (menu) menu.classList.toggle('hidden');
 }
 
-function selectVersion(n) {
+async function selectVersion(n) {
   selectedVersion = n;
   document.getElementById('version-menu').classList.add('hidden');
   updateVersionButton();
-  // Task 13 will wire this to actually re-render the document.
+  if (n === null) {
+    document.getElementById('view-toggle').classList.add('hidden');
+    document.getElementById('snapshot-btn').classList.remove('hidden');
+    await fetchReview();
+  } else {
+    document.getElementById('view-toggle').classList.remove('hidden');
+    document.getElementById('snapshot-btn').classList.add('hidden');
+    await renderHistoricalVersion();
+  }
+}
+
+async function renderHistoricalVersion() {
+  const filePath = state && state.file_path ? state.file_path : '';
+  const view = (selectedVersion === 0) ? 'full' : currentView;
+  const url = '/api/version?file=' + encodeURIComponent(filePath) +
+              '&n=' + selectedVersion + '&view=' + view;
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    alert('Failed to load v' + selectedVersion + ': ' + resp.status);
+    return;
+  }
+  const data = await resp.json();
+  if (view === 'diff') {
+    renderHistoricalDiff(data.diff, data.comments);
+  } else {
+    renderHistoricalFull(data.content, data.comments);
+  }
+  updateStatsForHistorical(data.comments);
+}
+
+function renderHistoricalFull(content, comments) {
+  const container = document.getElementById('file-content');
+  container.innerHTML = '';
+  const lines = content.split('\\n');
+  // Drop trailing empty entry from terminating newline so line numbers match.
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const byLine = {};
+  for (const c of comments) {
+    (byLine[c.line] ||= []).push(c);
+  }
+  lines.forEach((text, idx) => {
+    const lineNum = idx + 1;
+    const row = document.createElement('div');
+    row.className = 'line-row historical';
+    row.innerHTML =
+      '<span class="line-num">' + lineNum + '</span>' +
+      '<span class="line-text">' + escapeHtml(text) + '</span>';
+    container.appendChild(row);
+    (byLine[lineNum] || []).forEach(c => container.appendChild(renderCommentBlock(c)));
+  });
+}
+
+function renderHistoricalDiff(diffText, comments) {
+  const container = document.getElementById('file-content');
+  container.innerHTML = '';
+
+  // Compute which "new" line numbers are present in the diff so we know
+  // which comments fall inside hunks vs. outside.
+  const visible = new Set();
+  let newLine = 0;
+  for (const raw of diffText.split('\\n')) {
+    if (raw.startsWith('@@')) {
+      const m = raw.match(/\\+(\\d+)/);
+      if (m) newLine = parseInt(m[1]) - 1;
+    } else if (raw.startsWith('+++ ') || raw.startsWith('--- ')) {
+      // header
+    } else if (raw.startsWith('+')) {
+      newLine += 1;
+      visible.add(newLine);
+    } else if (raw.startsWith(' ')) {
+      newLine += 1;
+      visible.add(newLine);
+    } else if (raw.startsWith('-')) {
+      // removed line — does not advance newLine
+    }
+  }
+
+  const visibleComments = comments.filter(c => visible.has(c.line));
+  const hidden = comments.length - visibleComments.length;
+  if (hidden > 0) {
+    const notice = document.createElement('div');
+    notice.className = 'diff-notice';
+    notice.textContent = '(' + hidden + ' comment' + (hidden === 1 ? '' : 's') + ' hidden — switch to Full)';
+    container.appendChild(notice);
+  }
+
+  const pre = document.createElement('pre');
+  pre.className = 'diff-text';
+  pre.textContent = diffText;
+  container.appendChild(pre);
+
+  if (visibleComments.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'diff-comments';
+    for (const c of visibleComments) {
+      const anchor = document.createElement('div');
+      anchor.className = 'diff-comment-anchor';
+      const label = document.createElement('span');
+      label.className = 'diff-comment-line';
+      label.textContent = 'Line ' + c.line + ':';
+      anchor.appendChild(label);
+      anchor.appendChild(renderCommentBlock(c));
+      wrap.appendChild(anchor);
+    }
+    container.appendChild(wrap);
+  }
+}
+
+function updateStatsForHistorical(comments) {
+  const stats = document.getElementById('stats');
+  if (!stats) return;
+  const pending = comments.filter(c => c.status === 'pending').length;
+  const resolved = comments.filter(c => c.status === 'resolved').length;
+  stats.innerHTML =
+    '<span class="badge pending-badge">' + pending + ' pending</span>' +
+    '<span class="badge resolved-badge">' + resolved + ' resolved</span>';
 }
 
 document.addEventListener('click', (e) => {
@@ -1710,13 +1841,36 @@ function setView(view) {
   currentView = view;
   document.getElementById('toggle-diff').classList.toggle('active', view === 'diff');
   document.getElementById('toggle-full').classList.toggle('active', view === 'full');
-  // Task 13 will re-render based on the toggle.
+  if (selectedVersion !== null) {
+    renderHistoricalVersion();
+  }
 }
 
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+function renderCommentBlock(c) {
+  const block = document.createElement('div');
+  block.className = 'comment-block ' + c.status;
+  block.setAttribute('data-comment-id', c.id);
+  const actions = c.status === 'pending'
+    ? '<div class="comment-actions">' +
+      '<button onclick="startEdit(' + c.id + ')">Edit</button>' +
+      '<button onclick="resolveComment(' + c.id + ')">Resolve</button>' +
+      '<button class="btn-delete" onclick="deleteComment(' + c.id + ')">Delete</button>' +
+      '</div>'
+    : '<div class="comment-actions">' +
+      '<span class="resolved-tag">Resolved</span>' +
+      '<button class="btn-delete" onclick="deleteComment(' + c.id + ')">Delete</button>' +
+      '</div>';
+  block.innerHTML =
+    '<span class="comment-meta">#' + c.id + '</span>' +
+    '<span class="comment-text">' + escapeHtml(c.text) + '</span>' +
+    actions;
+  return block;
 }
 
 function setMode(next) {
@@ -1851,17 +2005,7 @@ function renderCommentMode(container, lines, review) {
     container.appendChild(row);
 
     (commentsByLine[lineNum] || []).forEach(c => {
-      const block = document.createElement('div');
-      block.className = `comment-block ${c.status}`;
-      block.setAttribute('data-comment-id', c.id);
-      const actions = c.status === 'pending'
-        ? `<div class="comment-actions"><button onclick="startEdit(${c.id})">Edit</button><button onclick="resolveComment(${c.id})">Resolve</button><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`
-        : `<div class="comment-actions"><span class="resolved-tag">Resolved</span><button class="btn-delete" onclick="deleteComment(${c.id})">Delete</button></div>`;
-      block.innerHTML =
-        `<span class="comment-meta">#${c.id}</span>` +
-        `<span class="comment-text">${escapeHtml(c.text)}</span>` +
-        actions;
-      container.appendChild(block);
+      container.appendChild(renderCommentBlock(c));
     });
 
     if (activeFormLine === lineNum && review.status !== 'approved') {
