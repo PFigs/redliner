@@ -24,15 +24,12 @@ def _env(tmp_path):
     return e
 
 
-def _seed_edit(tmp_path, plan, content, original):
-    os.environ["XDG_DATA_HOME"] = str(tmp_path / "xdg")
-    try:
-        from redliner.review import Review, save_review
-        review = Review()
-        review.set_edit(file=str(plan.resolve()), content=content, original=original)
-        save_review(plan, review)
-    finally:
-        del os.environ["XDG_DATA_HOME"]
+def _seed_edit(tmp_path, monkeypatch, plan, content, original):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    from redliner.review import Review, save_review
+    review = Review()
+    review.set_edit(file=str(plan.resolve()), content=content, original=original)
+    save_review(plan, review)
 
 
 def test_status_no_edits(tmp_path):
@@ -45,10 +42,10 @@ def test_status_no_edits(tmp_path):
     assert "edits_path" not in data
 
 
-def test_status_with_edits(tmp_path):
+def test_status_with_edits(tmp_path, monkeypatch):
     plan = tmp_path / "plan.md"
     plan.write_text("a\nb\n")
-    _seed_edit(tmp_path, plan, "A\nB\n", "a\nb\n")
+    _seed_edit(tmp_path, monkeypatch, plan, "A\nB\n", "a\nb\n")
 
     result = _run(tmp_path, _env(tmp_path), "status", str(plan))
     assert result.returncode == 0
@@ -57,10 +54,10 @@ def test_status_with_edits(tmp_path):
     assert data["edits_path"].endswith("edits.jsonl")
 
 
-def test_edits_subcommand_prints_diff(tmp_path):
+def test_edits_subcommand_prints_diff(tmp_path, monkeypatch):
     plan = tmp_path / "plan.md"
     plan.write_text("a\nb\n")
-    _seed_edit(tmp_path, plan, "a\nB\n", "a\nb\n")
+    _seed_edit(tmp_path, monkeypatch, plan, "a\nB\n", "a\nb\n")
 
     result = _run(tmp_path, _env(tmp_path), "edits", str(plan))
     assert result.returncode == 0
@@ -73,3 +70,4 @@ def test_edits_subcommand_no_edits_exits_one(tmp_path):
     plan.write_text("a\n")
     result = _run(tmp_path, _env(tmp_path), "edits", str(plan))
     assert result.returncode == 1
+    assert "No edits for" in result.stderr

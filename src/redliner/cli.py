@@ -8,7 +8,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from redliner.review import load_review, save_review, session_dir
+from redliner.review import edits_path, load_review, save_review, session_dir
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -119,16 +119,16 @@ def cmd_status(args: argparse.Namespace) -> None:
     key = str(plan_file)
     pending = review.pending_for(key)
     resolved = review.resolved_for(key)
+    edit = review.get_edit(key)
     data: dict = {
         "status": review.status_for(key),
         "pending": len(pending),
         "resolved": len(resolved),
         "total": len(pending) + len(resolved),
         "storage": str(session_dir(plan_file)),
-        "has_edits": review.get_edit(key) is not None,
+        "has_edits": edit is not None,
     }
-    if review.get_edit(key) is not None:
-        from redliner.review import edits_path
+    if edit is not None:
         data["edits_path"] = str(edits_path(plan_file))
     approved_at = review.approved_at_for(key)
     if approved_at:
