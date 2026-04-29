@@ -39,6 +39,18 @@ class Edit:
 
 
 @dataclass
+class Version:
+    file: str
+    version: int
+    content: str
+    created: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.created:
+            self.created = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass
 class FileState:
     status: str = "in_review"  # "in_review" | "approved"
     approved_at: str | None = None
@@ -51,6 +63,7 @@ class Review:
     comments: list[Comment] = field(default_factory=list)
     files: dict[str, FileState] = field(default_factory=dict)
     edits: dict[str, Edit] = field(default_factory=dict)
+    versions: dict[str, list[Version]] = field(default_factory=dict)
 
     def _ensure_file(self, file: str) -> FileState:
         state = self.files.get(file)
@@ -177,6 +190,10 @@ def edits_path(session: Path) -> Path:
     return session_dir(session) / "edits.jsonl"
 
 
+def versions_path(session: Path) -> Path:
+    return session_dir(session) / "versions.jsonl"
+
+
 def load_review(session: Path) -> Review:
     review = Review()
     cpath = comments_path(session)
@@ -199,6 +216,33 @@ def load_review(session: Path) -> Review:
                 continue
             e = Edit(**json.loads(line))
             review.edits[e.file] = e
+    vpath = versions_path(session)
+    if vpath.exists():
+        for raw in vpath.read_text().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            v = Version(**json.loads(line))
+            review.versions.setdefault(v.file, []).append(v)
+        for vlist in review.versions.values():
+            vlist.sort(key=lambda v: v.version)
+    else:
+        # Synthesize v0 from the file on disk; fall back to existing edit content
+        # if the file is no longer readable. If neither is available, leave versions
+        # empty (callers see head_version() == 0 and version_content() raises).
+        key = str(session.resolve())
+        content: str | None = None
+        try:
+            if session.is_file():
+                content = session.read_text()
+        except OSError:
+            content = None
+        if content is None:
+            existing = review.edits.get(key)
+            if existing is not None:
+                content = existing.content
+        if content is not None:
+            review.versions[key] = [Version(file=key, version=0, content=content)]
     return review
 
 
@@ -220,3 +264,12 @@ def save_review(session: Path, review: Review) -> None:
         epath.write_text("\n".join(edit_lines) + "\n")
     elif epath.exists():
         epath.unlink()
+    vpath = versions_path(session)
+    if review.versions:
+        version_lines: list[str] = []
+        for vlist in review.versions.values():
+            for v in vlist:
+                version_lines.append(json.dumps(asdict(v)))
+        vpath.write_text("\n".join(version_lines) + "\n")
+    elif vpath.exists():
+        vpath.unlink()
