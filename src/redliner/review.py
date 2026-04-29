@@ -157,6 +157,42 @@ class Review:
         state = self.files.get(file)
         return state.approved_at if state else None
 
+    def head_version(self, file: str) -> int:
+        vlist = self.versions.get(file)
+        if not vlist:
+            return 0
+        return max(v.version for v in vlist)
+
+    def snapshot(self, file: str, content: str) -> Version:
+        vlist = self.versions.setdefault(file, [])
+        next_num = (max((v.version for v in vlist), default=-1)) + 1
+        new = Version(file=file, version=next_num, content=content)
+        vlist.append(new)
+        return new
+
+    def version_content(self, file: str, n: int) -> str:
+        for v in self.versions.get(file, []):
+            if v.version == n:
+                return v.content
+        raise ValueError(f"version {n} not found for {file}")
+
+    def version_diff(self, file: str, n: int) -> str:
+        if n <= 0:
+            raise ValueError(f"version {n} has no previous version to diff against")
+        prev = self.version_content(file, n - 1)
+        curr = self.version_content(file, n)
+        return "".join(
+            difflib.unified_diff(
+                prev.splitlines(keepends=True),
+                curr.splitlines(keepends=True),
+                fromfile=f"{file}@v{n - 1}",
+                tofile=f"{file}@v{n}",
+            )
+        )
+
+    def comments_for_version(self, file: str, n: int) -> list[Comment]:
+        return [c for c in self.comments if c.file == file and c.version == n]
+
 
 def _data_dir() -> Path:
     """Return the XDG data directory for redliner."""
