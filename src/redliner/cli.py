@@ -185,7 +185,8 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         try:
             content = review.version_content(key, head)
         except ValueError:
-            content = plan_file.read_text()
+            print(f"No baseline content available for {plan_file}", file=sys.stderr)
+            sys.exit(1)
     new_version = review.snapshot(key, content)
     save_review(plan_file, review)
     print(f"Created v{new_version.version} at {new_version.created}")
