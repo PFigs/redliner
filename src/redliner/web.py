@@ -1610,7 +1610,7 @@ function renderCommentMode(container, lines, review) {
 function countDiffLines(diff) {
   if (!diff) return { added: 0, removed: 0 };
   let added = 0, removed = 0;
-  for (const line of diff.split('\n')) {
+  for (const line of diff.split('\\n')) {
     if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
     if (line.startsWith('+')) added++;
     else if (line.startsWith('-')) removed++;
